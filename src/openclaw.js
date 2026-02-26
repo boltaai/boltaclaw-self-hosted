@@ -31,6 +31,7 @@ import { execSync, spawn } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import chalk from 'chalk';
+import { AGENT_PRESETS, getAgentIds } from './agents.js';
 
 const OPENCLAW_NPM_PACKAGE = 'openclaw';
 const BOLTA_SKILLS_CLAWHUB_SLUG = 'MaxFritzhand/bolta-skills-index';
@@ -132,37 +133,45 @@ export class OpenClawManager {
    * Creates: config file, agent dirs, workspace files, auth profiles, skills.
    */
   async configure({ port = 18789, anthropicKey = null, openaiKey = null } = {}) {
-    // Create directory structure
-    for (const dir of [
+    // Create directory structure — one workspace shared by all agents,
+    // but each agent gets its own agent dir for auth/sessions
+    const dirs = [
       this.stateDir,
       this.workspaceDir,
       join(this.workspaceDir, 'memory'),
-      this.agentDir,
-      join(this.agentDir, 'agent'),
-      join(this.agentDir, 'sessions'),
       this.credentialsDir,
       join(this.stateDir, 'memory'),  // LanceDB
       join(this.stateDir, 'cron'),
-    ]) {
+    ];
+
+    // Create agent dirs for all 8 agents
+    for (const slug of getAgentIds()) {
+      const agentBase = join(this.stateDir, 'agents', slug);
+      dirs.push(agentBase, join(agentBase, 'agent'), join(agentBase, 'sessions'));
+    }
+
+    for (const dir of dirs) {
       mkdirSync(dir, { recursive: true });
     }
 
-    // 1. Write main OpenClaw config
+    // 1. Write main OpenClaw config (all 8 agents registered)
     this._writeMainConfig(port);
 
-    // 2. Write agent auth profiles (API keys)
-    this._writeAuthProfiles(anthropicKey, openaiKey);
+    // 2. Write auth profiles for each agent (shared API keys)
+    for (const slug of getAgentIds()) {
+      this._writeAuthProfiles(anthropicKey, openaiKey, slug);
+    }
 
-    // 3. Write agent models config
-    this._writeAgentModels();
+    // 3. Write each agent's SOUL.md and HEARTBEAT.md into workspace
+    this._writeAgentWorkspaceFiles();
 
-    // 4. Write workspace files
+    // 4. Write shared workspace files (AGENTS.md, TOOLS.md, USER.md)
     this._writeWorkspaceFiles();
 
     // 5. Install/update bolta-skills
     this._installSkills();
 
-    // 6. Configure channels if tokens are available
+    // 6. Configure channels (Telegram, Slack)
     this._configureChannels();
 
     if (this.verbose) {
@@ -204,14 +213,10 @@ export class OpenClawManager {
             maxConcurrent: 8,
           },
         },
-        list: [
-          {
-            id: 'bolta',
-            model: {
-              primary: 'anthropic/claude-sonnet-4-5',
-            },
-          },
-        ],
+        list: getAgentIds().map(slug => ({
+          id: slug,
+          model: { primary: 'anthropic/claude-sonnet-4-5' },
+        })),
       },
       messages: {
         ackReactionScope: 'group-mentions',
@@ -254,9 +259,12 @@ export class OpenClawManager {
     writeFileSync(this.configPath, JSON.stringify(config, null, 2));
   }
 
-  _writeAuthProfiles(anthropicKey, openaiKey) {
+  _writeAuthProfiles(anthropicKey, openaiKey, agentSlug = null) {
     // OpenClaw stores API keys in agents/<id>/agent/auth-profiles.json
-    const authProfilesPath = join(this.agentDir, 'agent', 'auth-profiles.json');
+    const agentBase = agentSlug
+      ? join(this.stateDir, 'agents', agentSlug)
+      : this.agentDir;
+    const authProfilesPath = join(agentBase, 'agent', 'auth-profiles.json');
 
     // Read existing or create new
     let profiles = { profiles: {}, lastGood: {}, usageStats: {} };
@@ -289,17 +297,34 @@ export class OpenClawManager {
     writeFileSync(authProfilesPath, JSON.stringify(profiles, null, 2));
 
     // Also write auth.json (must exist, can be empty)
-    const authPath = join(this.agentDir, 'agent', 'auth.json');
+    const authPath = join(agentBase, 'agent', 'auth.json');
     if (!existsSync(authPath)) {
       writeFileSync(authPath, '{}');
     }
   }
 
-  _writeAgentModels() {
-    // Agent-level model overrides
-    const modelsPath = join(this.agentDir, 'agent', 'models.json');
-    const models = { providers: {} };
-    writeFileSync(modelsPath, JSON.stringify(models, null, 2));
+  // ─── Per-Agent Workspace Files ────────────────────────────────
+
+  _writeAgentWorkspaceFiles() {
+    // Each agent gets their SOUL.md and HEARTBEAT.md in the shared workspace
+    // under agent-specific subdirs, plus a models.json in their agent dir
+    for (const [slug, preset] of Object.entries(AGENT_PRESETS)) {
+      // Write SOUL.md into workspace/agents/<slug>/
+      const agentWorkspace = join(this.workspaceDir, 'agents', slug);
+      mkdirSync(agentWorkspace, { recursive: true });
+      writeFileSync(join(agentWorkspace, 'SOUL.md'), preset.soul);
+      writeFileSync(join(agentWorkspace, 'HEARTBEAT.md'), preset.heartbeat);
+
+      // Write models.json in agent dir
+      const modelsPath = join(this.stateDir, 'agents', slug, 'agent', 'models.json');
+      if (!existsSync(modelsPath)) {
+        writeFileSync(modelsPath, JSON.stringify({ providers: {} }, null, 2));
+      }
+    }
+
+    if (this.verbose) {
+      console.log(chalk.green(`  ✓ ${Object.keys(AGENT_PRESETS).length} agents configured with SOULs and heartbeats`));
+    }
   }
 
   _configureChannels() {
@@ -311,27 +336,30 @@ export class OpenClawManager {
 
     let changed = false;
 
-    // Telegram
+    // Telegram — fully pre-configured for immediate use
     const tgToken = this.config.get('TELEGRAM_BOT_TOKEN');
     if (tgToken) {
+      const allowFrom = [];
+      // Add user's Telegram ID to allowlist
+      const tgUserId = this.config.get('TELEGRAM_USER_ID');
+      if (tgUserId) allowFrom.push(tgUserId);
+
       config.channels.telegram = {
         botToken: tgToken,
-        dmPolicy: 'allowlist',
+        dmPolicy: allowFrom.length > 0 ? 'allowlist' : 'open',
         groupPolicy: 'allowlist',
         streaming: true,
-        allowFrom: [],
+        allowFrom,
       };
-
-      // If user provided their Telegram ID, add to allowlist
-      const tgUserId = this.config.get('TELEGRAM_USER_ID');
-      if (tgUserId) {
-        config.channels.telegram.allowFrom = [tgUserId];
-      }
 
       // Enable telegram plugin
       if (!config.plugins) config.plugins = { slots: {}, entries: {} };
       config.plugins.entries.telegram = { enabled: true };
       changed = true;
+
+      if (this.verbose) {
+        console.log(chalk.green(`  ✓ Telegram configured${allowFrom.length ? ` (allowlist: ${allowFrom.join(', ')})` : ' (open DMs)'}`));
+      }
     }
 
     // Slack
@@ -389,12 +417,24 @@ ${voiceProfile || 'Adapt to the brand voice configured in the workspace. Be prof
 - Report results back to the Bolta dashboard
 `);
 
+    // Build agent roster for AGENTS.md
+    const agentRoster = Object.entries(AGENT_PRESETS).map(([slug, p]) =>
+      `- **${p.emoji} ${p.name}** (\`${slug}\`) — ${p.tagline}`
+    ).join('\n');
+
     writeIfMissing('AGENTS.md', `# AGENTS.md — Bolta Workspace
 
 ## Identity
 - Running on self-hosted OpenClaw engine
 - Workspace ID: ${workspaceId}
 - Connected to Bolta Cloud via secure WebSocket bridge
+- ${Object.keys(AGENT_PRESETS).length} agents pre-configured and ready
+
+## Your Team
+${agentRoster}
+
+Each agent has their own SOUL.md and HEARTBEAT.md in \`agents/<slug>/\`.
+The Conductor dispatches jobs to the right agent based on your request.
 
 ## Tools
 Available tools come from multiple sources:
@@ -645,16 +685,17 @@ account management, and direct integrations.
    * Uses `openclaw agent` which routes through the running gateway,
    * giving full access to tools, memory, skills, channels, etc.
    */
-  async executeAgentTurn(message, { systemContext = '', timeout = 180000 } = {}) {
+  async executeAgentTurn(message, { agentSlug = 'hype-man', systemContext = '', timeout = 180000 } = {}) {
     try {
       const token = this.config.get('gateway_token') || '';
 
-      // Build the agent command
-      // --local would bypass gateway; we want gateway for full tool access
+      // Route to the specific agent — each has their own SOUL and session
+      const agentId = getAgentIds().includes(agentSlug) ? agentSlug : 'hype-man';
+
       const args = [
         '--profile', this.profileName,
         'agent',
-        '--agent', 'bolta',
+        '--agent', agentId,
         '--message', message,
         '--json',
         '--timeout', String(Math.floor(timeout / 1000)),

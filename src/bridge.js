@@ -104,8 +104,9 @@ export class Bridge {
       // Build system context from workspace + agent context
       const systemContext = this._buildSystemContext(agent_slug, context);
 
-      // Execute via local OpenClaw agent
+      // Execute via the specific local OpenClaw agent
       const result = await this.ocManager.executeAgentTurn(input, {
+        agentSlug: agent_slug,
         systemContext,
         timeout: 180000, // 3 min max per job
       });
