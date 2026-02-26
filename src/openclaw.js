@@ -285,14 +285,8 @@ export class OpenClawManager {
         entries: {},
       },
       plugins: {
-        slots: {
-          memory: 'memory-lancedb',
-        },
-        entries: {
-          'memory-lancedb': {
-            enabled: true,
-          },
-        },
+        slots: {},
+        entries: {},
       },
     };
 

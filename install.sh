@@ -57,6 +57,12 @@ if need_node_upgrade; then
       echo -e "  ${GRAY}Installing via Homebrew...${RESET}"
       brew install node@22 2>/dev/null || brew upgrade node 2>/dev/null
       brew link --overwrite node@22 2>/dev/null || true
+      # Homebrew keg-only: add to PATH for this session + future shells
+      if [ -d "/opt/homebrew/opt/node@22/bin" ]; then
+        export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
+      elif [ -d "/usr/local/opt/node@22/bin" ]; then
+        export PATH="/usr/local/opt/node@22/bin:$PATH"
+      fi
     else
       die "Install Homebrew first (https://brew.sh) or Node.js 22+ (https://nodejs.org)"
     fi
