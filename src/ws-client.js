@@ -17,7 +17,7 @@ export class WSClient extends EventEmitter {
 
   connect() {
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(this.url, { headers: this.headers });
+      this.ws = new WebSocket(this.url);
 
       this.ws.on('open', () => {
         this.connected = true;

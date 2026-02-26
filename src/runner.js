@@ -31,8 +31,21 @@ export class Runner {
     this.ws.on('job_cancel', (data) => this._onJobCancel(data));
     this.ws.on('config_sync', (data) => this._onConfigSync(data));
     this.ws.on('ping', () => this.ws.send('pong', {}));
+    this.ws.on('error', (data) => {
+      console.error(`  ❌ Server error: ${data.message || 'Unknown'}`);
+    });
 
     await this.ws.connect();
+
+    // Authenticate after connection (consumer expects auth as first message)
+    this.ws.send('auth', { token });
+
+    // Re-authenticate on reconnect
+    this.ws.on('reconnected', () => {
+      const currentToken = this.config.get('runner_key') || this.config.get('install_token');
+      if (currentToken) this.ws.send('auth', { token: currentToken });
+    });
+
     this._startHeartbeat();
   }
 
