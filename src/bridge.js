@@ -76,13 +76,20 @@ export class Bridge {
   // --- Event Handlers ---
 
   _onHandshake(data) {
+    console.log('  📨 Handshake data keys:', Object.keys(data));
     // Install token → persistent runner key swap
     if (data.runner_key) {
-      this.config.set('runner_key', data.runner_key);
-      this.config.delete('install_token'); // Burn the install token
-      console.log(`  🔑 Runner key saved: ${data.runner_key.slice(0, 12)}...`);
+      try {
+        this.config.set('runner_key', data.runner_key);
+        this.config.delete('install_token'); // Burn the install token
+        // Verify it was saved
+        const saved = this.config.get('runner_key');
+        console.log(`  🔑 Runner key saved: ${data.runner_key.slice(0, 12)}... (verified: ${saved ? 'yes' : 'NO'})`);
+      } catch (err) {
+        console.error(`  ❌ Failed to save runner_key: ${err.message}`);
+      }
     } else {
-      console.log('  ⚠ No runner_key in handshake response');
+      console.log('  ⚠ No runner_key in handshake response. Data:', JSON.stringify(data).slice(0, 200));
     }
     if (data.workspace_id) {
       this.config.set('workspace_id', data.workspace_id);
