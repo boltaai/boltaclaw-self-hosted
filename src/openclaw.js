@@ -31,7 +31,7 @@ import { execSync, spawn } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import chalk from 'chalk';
-import { AGENT_PRESETS, getAgentIds } from './agents.js';
+import { AGENT_PRESETS, getAgentIds, buildCronJobs } from './agents.js';
 
 const OPENCLAW_NPM_PACKAGE = 'openclaw';
 const BOLTA_SKILLS_CLAWHUB_SLUG = 'MaxFritzhand/bolta-skills-index';
@@ -176,6 +176,9 @@ export class OpenClawManager {
 
     // 7. Configure channels (Telegram, Slack)
     this._configureChannels();
+
+    // 8. Configure cron schedules for all agents
+    this._configureCronJobs();
 
     if (this.verbose) {
       console.log(chalk.gray(`  State dir:  ${this.stateDir}`));
@@ -448,6 +451,36 @@ export class OpenClawManager {
 
     if (changed) {
       writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+    }
+  }
+
+  // ─── Cron Schedules ──────────────────────────────────────────────
+
+  _configureCronJobs() {
+    // Build cron jobs from agent presets and write to cron dir
+    const timezone = this.config.get('timezone') || 'America/New_York';
+    const cronJobs = buildCronJobs(timezone);
+
+    // OpenClaw stores cron jobs in the cron/ directory as individual JSON files
+    const cronDir = join(this.stateDir, 'cron');
+    mkdirSync(cronDir, { recursive: true });
+
+    // Write a manifest that OpenClaw reads on startup
+    const cronConfigPath = join(cronDir, 'jobs.json');
+    const existingJobs = [];
+    try {
+      const existing = JSON.parse(readFileSync(cronConfigPath, 'utf-8'));
+      if (Array.isArray(existing)) existingJobs.push(...existing);
+    } catch { /* fresh install */ }
+
+    // Merge: keep user-created jobs, replace preset-generated ones
+    const userJobs = existingJobs.filter(j => !j._preset);
+    const presetJobs = cronJobs.map(j => ({ ...j, _preset: true }));
+
+    writeFileSync(cronConfigPath, JSON.stringify([...userJobs, ...presetJobs], null, 2));
+
+    if (this.verbose) {
+      console.log(chalk.green(`  ✓ ${cronJobs.length} cron jobs configured for ${Object.keys(AGENT_PRESETS).length} agents`));
     }
   }
 
