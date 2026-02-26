@@ -55,8 +55,13 @@ export class Bridge {
 
     await this.ws.connect();
 
+    // Small delay to ensure WS is fully ready before sending auth
+    await new Promise(r => setTimeout(r, 100));
+
     // Authenticate (consumer expects auth as first message)
+    console.log('  🔑 Sending auth...');
     this.ws.send('auth', { token });
+    console.log('  🔑 Auth sent, waiting for handshake...');
 
     this._startHeartbeat();
   }

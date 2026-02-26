@@ -17,7 +17,11 @@ export class WSClient extends EventEmitter {
 
   connect() {
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(this.url);
+      this.ws = new WebSocket(this.url, {
+        headers: this.headers,
+        handshakeTimeout: 10000,
+        perMessageDeflate: false,
+      });
 
       this.ws.on('open', () => {
         this.connected = true;
@@ -39,9 +43,7 @@ export class WSClient extends EventEmitter {
 
       this.ws.on('close', (code, reason) => {
         this.connected = false;
-        if (this.verbose) {
-          console.log(`  WS closed: ${code} ${reason?.toString() || ''}`);
-        }
+        console.log(`  ⚠ WS closed: code=${code} reason=${reason?.toString() || 'none'}`);
         if (this.shouldReconnect) this._reconnect();
       });
 
