@@ -124,7 +124,8 @@ export class OpenClawManager {
     }
 
     try {
-      execSync(`npm install ${OPENCLAW_NPM_PACKAGE}`, {
+      // Use npm install with explicit save to ensure it gets added
+      execSync(`npm install --save ${OPENCLAW_NPM_PACKAGE}@latest`, {
         cwd: this.stateDir,
         stdio: 'inherit',
         timeout: 120000,
