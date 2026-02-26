@@ -143,8 +143,9 @@ export class Bridge {
 
   _onConfigSync(data) {
     if (data.config) {
-      this._applyCloudConfig(data.config);
-      console.log('  🔄 Config synced from Bolta Cloud');
+      // Apply to OpenClaw workspace files (SOUL.md, USER.md, TOOLS.md)
+      this.ocManager.applyCloudConfig(data.config);
+      console.log('  🔄 Config synced from Bolta Cloud → OpenClaw workspace updated');
     }
   }
 
@@ -153,7 +154,21 @@ export class Bridge {
   _buildSystemContext(agentSlug, context = {}) {
     const parts = [];
 
-    parts.push(`You are acting as the "${agentSlug}" agent for the Bolta social media platform.`);
+    // Agent role mapping
+    const agentRoles = {
+      hunter: 'Content Discovery & Trending Topics',
+      hype_man: 'Viral Content & Engagement Optimization',
+      deep_diver: 'Long-form Research & Analysis',
+      guardian: 'Brand Safety & Compliance',
+      analyst: 'Performance Analytics & Insights',
+      engager: 'Community & Reply Management',
+      reply_specialist: 'Smart Replies & Conversations',
+      storyteller: 'Narrative & Brand Storytelling',
+    };
+
+    const role = agentRoles[agentSlug] || 'General Social Media Agent';
+    parts.push(`You are the "${agentSlug}" agent, specializing in ${role}.`);
+    parts.push('Execute the task below and return actionable results.');
 
     if (context.workspace_context) {
       parts.push(`\n## Workspace Context\n${
@@ -171,25 +186,13 @@ export class Bridge {
       parts.push(`\n## Target Account\nAccount ID: ${context.account_id}`);
     }
 
+    // Add voice profile if available
+    const voiceProfile = this.config.get('voice_profile');
+    if (voiceProfile) {
+      parts.push(`\n## Brand Voice\n${voiceProfile}`);
+    }
+
     return parts.join('\n');
-  }
-
-  _applyCloudConfig(cloudConfig) {
-    // Store cloud-pushed config locally
-    for (const [key, value] of Object.entries(cloudConfig)) {
-      const strValue = typeof value === 'string' ? value : JSON.stringify(value);
-      this.config.set(`cloud_${key}`, strValue);
-    }
-
-    // If agents config received, update OpenClaw workspace
-    if (cloudConfig.agents) {
-      this.config.set('cloud_agents', JSON.stringify(cloudConfig.agents));
-    }
-
-    // If voice profile received, store for prompt injection
-    if (cloudConfig.voice_profile) {
-      this.config.set('voice_profile', cloudConfig.voice_profile);
-    }
   }
 
   _startHeartbeat() {
