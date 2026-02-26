@@ -127,25 +127,25 @@ else
   echo -e "  ${GREEN}✓${RESET} mcporter installed"
 fi
 
-# --- Install @boltaai/boltaclaw ---
-echo -e "  Installing @boltaai/boltaclaw..."
-npm install -g @boltaai/boltaclaw@latest 2>/dev/null || {
-  # Not on npm yet — install from GitHub
-  npm install -g github:boltaai/boltaclaw-self-hosted 2>/dev/null || {
-    echo -e "  ${YELLOW}Registry install failed, cloning from GitHub...${RESET}"
-    INSTALL_DIR="$HOME/.boltaclaw/engine"
-    if [ -d "$INSTALL_DIR" ]; then
-      cd "$INSTALL_DIR" && git pull --quiet 2>/dev/null
-    else
-      mkdir -p "$INSTALL_DIR"
-      git clone --depth 1 https://github.com/boltaai/boltaclaw-self-hosted.git "$INSTALL_DIR"
-    fi
-    cd "$INSTALL_DIR"
-    npm install --production
-    npm link 2>/dev/null || sudo npm link
-  }
+# --- Install BoltaClaw ---
+INSTALL_DIR="$HOME/.boltaclaw/engine"
+echo -e "  Installing BoltaClaw..."
+if [ -d "$INSTALL_DIR/.git" ]; then
+  cd "$INSTALL_DIR" && git pull --quiet 2>/dev/null
+  npm install --production --silent 2>/dev/null
+else
+  rm -rf "$INSTALL_DIR" 2>/dev/null
+  mkdir -p "$(dirname "$INSTALL_DIR")"
+  git clone --depth 1 https://github.com/boltaai/boltaclaw-self-hosted.git "$INSTALL_DIR"
+  cd "$INSTALL_DIR"
+  npm install --production --silent
+fi
+npm link 2>/dev/null || sudo npm link 2>/dev/null || {
+  # Fallback: add bin to PATH directly
+  echo -e "  ${GRAY}Adding boltaclaw to PATH...${RESET}"
+  export PATH="$INSTALL_DIR/node_modules/.bin:$INSTALL_DIR:$PATH"
 }
-echo -e "  ${GREEN}✓${RESET} boltaclaw installed"
+echo -e "  ${GREEN}✓${RESET} BoltaClaw installed"
 
 # --- Clone bolta-skills ---
 SKILLS_DIR="$HOME/.boltaclaw/skills"
