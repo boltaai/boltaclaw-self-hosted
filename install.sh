@@ -38,6 +38,12 @@ step() { echo -e "  ${BLUE}[$1/6]${RESET} $2"; }
 
 echo -e "\n${BLUE}${BOLD}  ⚡ Bolta OpenClaw Engine Installer${RESET}\n"
 
+# --- Fix npm cache ownership (common issue after sudo npm install) ---
+if [ -d "$HOME/.npm" ] && [ "$(stat -f %u "$HOME/.npm" 2>/dev/null || stat -c %u "$HOME/.npm" 2>/dev/null)" != "$(id -u)" ]; then
+  echo -e "  ${GRAY}Fixing npm cache permissions...${RESET}"
+  sudo chown -R "$(whoami)" "$HOME/.npm" 2>/dev/null || true
+fi
+
 # --- Detect OS ---
 OS="unknown"
 if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -128,7 +134,12 @@ else
 fi
 
 echo -e "  ${GRAY}Installing dependencies...${RESET}"
-npm install --production || die "npm install failed in $INSTALL_DIR"
+npm install --omit=dev || {
+  echo -e "  ${YELLOW}Retrying with cache clean...${RESET}"
+  npm cache clean --force 2>/dev/null
+  sudo chown -R "$(whoami)" "$HOME/.npm" 2>/dev/null || true
+  npm install --omit=dev || die "npm install failed in $INSTALL_DIR — try: sudo chown -R \$(whoami) ~/.npm"
+}
 
 echo -e "  ${GRAY}Linking boltaclaw command...${RESET}"
 if npm link 2>&1; then
