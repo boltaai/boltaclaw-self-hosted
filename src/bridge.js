@@ -15,7 +15,7 @@
 import { WSClient } from './ws-client.js';
 import { Database } from './db.js';
 
-const BOLTA_WS_URL = process.env.BOLTA_WS_URL || 'wss://api.bolta.ai/ws/runner';
+const BOLTA_WS_URL = process.env.BOLTA_WS_URL || 'wss://platty.boltathread.com/ws/runner/';
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
 export class Bridge {
