@@ -44,13 +44,15 @@ export class Bridge {
     this.ws.on('config_sync', (data) => this._onConfigSync(data));
     this.ws.on('ping', () => this.ws.send('pong', {}));
     this.ws.on('error', (data) => {
-      if (this.verbose) console.error(`  ❌ Server error: ${data.message || 'Unknown'}`);
+      console.error(`  ❌ Server error: ${data.message || 'Unknown'}`);
     });
 
-    // Reconnect handler
+    // Reconnect handler — use persistent runner_key (install token is burned after first handshake)
     this.ws.on('reconnected', () => {
-      const currentToken = this.config.get('runner_key') || this.config.get('install_token');
-      if (currentToken) this.ws.send('auth', { token: currentToken });
+      const runnerKey = this.config.get('runner_key');
+      const token = runnerKey || this.config.get('install_token');
+      console.log(`  🔄 Reconnecting with ${runnerKey ? 'runner_key' : 'install_token'}: ${token?.slice(0, 15)}...`);
+      if (token) this.ws.send('auth', { token });
     });
 
     await this.ws.connect();
@@ -78,7 +80,9 @@ export class Bridge {
     if (data.runner_key) {
       this.config.set('runner_key', data.runner_key);
       this.config.delete('install_token'); // Burn the install token
-      if (this.verbose) console.log('  🔑 Runner key received, install token burned');
+      console.log(`  🔑 Runner key saved: ${data.runner_key.slice(0, 12)}...`);
+    } else {
+      console.log('  ⚠ No runner_key in handshake response');
     }
     if (data.workspace_id) {
       this.config.set('workspace_id', data.workspace_id);
