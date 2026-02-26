@@ -103,19 +103,9 @@ fi
 command -v git &>/dev/null || die "Git is required but not installed"
 echo -e "  ${GREEN}✓${RESET} Git $(git --version | cut -d' ' -f3)"
 
-# --- 2. Install OpenClaw ---
-step 2 "Installing OpenClaw..."
-if command -v openclaw &>/dev/null; then
-  echo -e "  ${GREEN}✓${RESET} OpenClaw $(openclaw --version 2>/dev/null | head -1) (already installed)"
-else
-  if npm install -g openclaw 2>&1; then
-    echo -e "  ${GREEN}✓${RESET} OpenClaw installed"
-  else
-    echo -e "  ${YELLOW}Retrying with sudo...${RESET}"
-    sudo npm install -g openclaw || die "Failed to install OpenClaw"
-    echo -e "  ${GREEN}✓${RESET} OpenClaw installed (sudo)"
-  fi
-fi
+# --- 2. Skip (OpenClaw installed locally by BoltaClaw on first start) ---
+step 2 "OpenClaw will be installed locally on first start..."
+echo -e "  ${GREEN}✓${RESET} Deferred (installs to ~/.openclaw-bolta/)"
 
 # --- 3. Install BoltaClaw ---
 step 3 "Installing BoltaClaw..."
@@ -137,43 +127,37 @@ echo -e "  ${GRAY}Installing dependencies...${RESET}"
 npm install --omit=dev || {
   echo -e "  ${YELLOW}Retrying with cache clean...${RESET}"
   npm cache clean --force 2>/dev/null
-  sudo chown -R "$(whoami)" "$HOME/.npm" 2>/dev/null || true
-  npm install --omit=dev || die "npm install failed in $INSTALL_DIR — try: sudo chown -R \$(whoami) ~/.npm"
+  npm install --omit=dev || die "npm install failed in $INSTALL_DIR"
 }
 
-echo -e "  ${GRAY}Linking boltaclaw command...${RESET}"
+# Make cli.js executable and create a local wrapper
 chmod +x "$INSTALL_DIR/src/cli.js"
-if npm link 2>&1; then
-  true
-elif sudo npm link 2>&1; then
-  true
-else
-  # Last resort: create a wrapper script
-  echo -e "  ${YELLOW}npm link failed, creating manual wrapper...${RESET}"
-  WRAPPER="/usr/local/bin/boltaclaw"
-  echo "#!/bin/bash" | sudo tee "$WRAPPER" > /dev/null
-  echo "exec node $INSTALL_DIR/src/cli.js \"\$@\"" | sudo tee -a "$WRAPPER" > /dev/null
-  sudo chmod +x "$WRAPPER"
+BOLTACLAW_BIN="$HOME/.boltaclaw/bin"
+mkdir -p "$BOLTACLAW_BIN"
+cat > "$BOLTACLAW_BIN/boltaclaw" << WRAPPER
+#!/bin/bash
+exec node "$INSTALL_DIR/src/cli.js" "\$@"
+WRAPPER
+chmod +x "$BOLTACLAW_BIN/boltaclaw"
+
+# Add to PATH for this session
+export PATH="$BOLTACLAW_BIN:$PATH"
+
+# Add to shell profile if not already there
+SHELL_RC="$HOME/.zshrc"
+[ -f "$HOME/.bashrc" ] && ! [ -f "$HOME/.zshrc" ] && SHELL_RC="$HOME/.bashrc"
+if ! grep -q '.boltaclaw/bin' "$SHELL_RC" 2>/dev/null; then
+  echo "" >> "$SHELL_RC"
+  echo '# BoltaClaw' >> "$SHELL_RC"
+  echo 'export PATH="$HOME/.boltaclaw/bin:$PATH"' >> "$SHELL_RC"
+  echo -e "  ${GRAY}Added ~/.boltaclaw/bin to PATH in $(basename $SHELL_RC)${RESET}"
 fi
 
-# Verify boltaclaw command exists
-if command -v boltaclaw &>/dev/null; then
-  echo -e "  ${GREEN}✓${RESET} BoltaClaw installed"
-else
-  die "BoltaClaw installed but 'boltaclaw' command not found in PATH"
-fi
+echo -e "  ${GREEN}✓${RESET} BoltaClaw installed"
 
-# --- 4. Install mcporter (MCP tool bridge) ---
-step 4 "Installing mcporter..."
-if command -v mcporter &>/dev/null; then
-  echo -e "  ${GREEN}✓${RESET} mcporter (already installed)"
-else
-  npm install -g mcporter 2>&1 || sudo npm install -g mcporter 2>&1 || \
-    echo -e "  ${YELLOW}⚠ mcporter not installed — MCP tools won't be available${RESET}"
-  if command -v mcporter &>/dev/null; then
-    echo -e "  ${GREEN}✓${RESET} mcporter installed"
-  fi
-fi
+# --- 4. mcporter installed locally by BoltaClaw ---
+step 4 "MCP tools..."
+echo -e "  ${GREEN}✓${RESET} Will be configured on first start"
 
 # --- 5. Clone bolta-skills ---
 step 5 "Downloading skills..."
