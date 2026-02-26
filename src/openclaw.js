@@ -70,7 +70,8 @@ export class OpenClawManager {
 
   /** Run an openclaw CLI command, return stdout. */
   _exec(args, { timeout = 30000, throwOnError = true } = {}) {
-    const cmd = `openclaw --profile ${this.profileName} ${args}`;
+    const bin = this.openclawBin || 'openclaw';
+    const cmd = `"${bin}" --profile ${this.profileName} ${args}`;
     try {
       return execSync(cmd, {
         encoding: 'utf-8',
@@ -88,29 +89,65 @@ export class OpenClawManager {
   // ─── Installation ───────────────────────────────────────────────
 
   async check() {
-    try {
-      const version = execSync('openclaw --version 2>/dev/null', {
-        encoding: 'utf-8',
-        timeout: 10000,
-      }).trim();
-      this.openclawBin = execSync('which openclaw 2>/dev/null', { encoding: 'utf-8' }).trim();
-      return { installed: true, version };
-    } catch {
-      return { installed: false, version: null };
+    // Check local install first, then global
+    const localBin = join(this.stateDir, 'node_modules', '.bin', 'openclaw');
+    const candidates = [
+      localBin,
+      'openclaw', // global PATH
+    ];
+
+    for (const bin of candidates) {
+      try {
+        const version = execSync(`"${bin}" --version 2>/dev/null`, {
+          encoding: 'utf-8',
+          timeout: 10000,
+        }).trim();
+        this.openclawBin = bin === 'openclaw'
+          ? execSync('which openclaw 2>/dev/null', { encoding: 'utf-8', timeout: 3000 }).trim()
+          : bin;
+        return { installed: true, version };
+      } catch { /* try next */ }
     }
+
+    return { installed: false, version: null };
   }
 
   async install() {
-    if (this.verbose) console.log(chalk.gray('  Installing OpenClaw via npm...'));
+    // Install OpenClaw locally into the state dir — no sudo, no global
+    console.log(chalk.gray('  Installing OpenClaw locally into ' + this.stateDir + '...'));
+    mkdirSync(this.stateDir, { recursive: true });
+
+    // Create a package.json if missing (needed for local npm install)
+    const pkgPath = join(this.stateDir, 'package.json');
+    if (!existsSync(pkgPath)) {
+      writeFileSync(pkgPath, JSON.stringify({ name: 'openclaw-bolta', private: true }, null, 2));
+    }
+
     try {
-      execSync(`npm install -g ${OPENCLAW_NPM_PACKAGE}`, {
-        stdio: this.verbose ? 'inherit' : 'pipe',
+      execSync(`npm install ${OPENCLAW_NPM_PACKAGE}`, {
+        cwd: this.stateDir,
+        stdio: 'inherit',
         timeout: 120000,
       });
-      this.openclawBin = execSync('which openclaw', { encoding: 'utf-8' }).trim();
     } catch (err) {
-      throw new Error(`Failed to install OpenClaw: ${err.message}`);
+      throw new Error(`npm install openclaw failed: ${err.message}`);
     }
+
+    // Find the binary
+    const localBin = join(this.stateDir, 'node_modules', '.bin', 'openclaw');
+    if (existsSync(localBin)) {
+      this.openclawBin = localBin;
+      return;
+    }
+
+    // Fallback: check if openclaw.mjs exists and create a wrapper
+    const ocMjs = join(this.stateDir, 'node_modules', 'openclaw', 'openclaw.mjs');
+    if (existsSync(ocMjs)) {
+      this.openclawBin = ocMjs;
+      return;
+    }
+
+    throw new Error(`OpenClaw installed but binary not found. Checked:\n  ${localBin}\n  ${ocMjs}`);
   }
 
   async update() {
@@ -730,8 +767,9 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
 
     return new Promise((resolve, reject) => {
       // Use openclaw gateway run (foreground) in a detached child
+      const bin = this.openclawBin || 'openclaw';
       this.gatewayProcess = spawn(
-        'openclaw',
+        bin,
         ['--profile', this.profileName, 'gateway', 'run', '--force'],
         {
           env: this._env(),
@@ -796,8 +834,9 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
       const port = this.config.get('gateway_port') || '18789';
       const token = this.config.get('gateway_token') || '';
 
+      const bin = this.openclawBin || 'openclaw';
       const result = execSync(
-        `openclaw --profile ${this.profileName} gateway call health --token "${token}" --json 2>/dev/null`,
+        `"${bin}" --profile ${this.profileName} gateway call health --token "${token}" --json 2>/dev/null`,
         {
           encoding: 'utf-8',
           env: this._env(),
@@ -813,10 +852,11 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
   }
 
   async tailLogs(follow = false) {
+    const bin = this.openclawBin || 'openclaw';
     const args = ['--profile', this.profileName, 'logs'];
     if (follow) args.push('-f');
 
-    spawn('openclaw', args, { env: this._env(), stdio: 'inherit' });
+    spawn(bin, args, { env: this._env(), stdio: 'inherit' });
   }
 
   // ─── Agent Execution ────────────────────────────────────────────
@@ -843,7 +883,8 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
         '--timeout', String(Math.floor(timeout / 1000)),
       ];
 
-      const cmd = 'openclaw ' + args.map(a => {
+      const agentBin = this.openclawBin || 'openclaw';
+      const cmd = `"${agentBin}" ` + args.map(a => {
         // Escape the message properly
         if (a.includes(' ') || a.includes('"') || a.includes("'") || a.includes('\n')) {
           return JSON.stringify(a);
