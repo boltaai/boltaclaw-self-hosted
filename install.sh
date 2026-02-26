@@ -118,6 +118,15 @@ else
   echo -e "  ${GREEN}✓${RESET} OpenClaw installed"
 fi
 
+# --- Install mcporter (MCP tool bridge) ---
+if command -v mcporter &>/dev/null; then
+  echo -e "  ${GREEN}✓${RESET} mcporter $(mcporter --version 2>/dev/null) (existing)"
+else
+  echo -e "  Installing mcporter..."
+  npm install -g mcporter 2>/dev/null || sudo npm install -g mcporter 2>/dev/null || true
+  echo -e "  ${GREEN}✓${RESET} mcporter installed"
+fi
+
 # --- Install @boltaai/boltaclaw ---
 echo -e "  Installing @boltaai/boltaclaw..."
 npm install -g @boltaai/boltaclaw@latest 2>/dev/null || {

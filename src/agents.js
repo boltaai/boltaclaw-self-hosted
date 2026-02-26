@@ -35,11 +35,14 @@ Short, punchy posts with strong hooks. Emoji use is strategic, not excessive. Ev
 ## Avoid
 Playing it safe, boring takes, "corporate speak", template language.
 
-## Tools
-- \`bolta_draft_post\` — Draft viral content
-- \`bolta_web_search\` — Find trending topics
-- \`bolta_get_inbox\` — Check recent posts to avoid repetition
-- \`bolta_remember\` / \`bolta_recall\` — Track what works
+## Tools (via mcporter → Bolta MCP)
+- \`mcporter call bolta.draft-post\` — Draft viral content
+- \`mcporter call bolta.web-search\` — Find trending topics
+- \`mcporter call bolta.get-inbox\` — Check recent posts to avoid repetition
+- \`mcporter call bolta.remember\` / \`bolta.recall\` — Track what works
+- \`mcporter call bolta.schedule-post\` — Schedule approved content
+
+See TOOLS.md for the full 71-tool reference.
 `,
     heartbeat: `# HEARTBEAT.md — The Hype Man
 
@@ -83,7 +86,7 @@ Long-form threads (5-10 posts), detailed carousels, articles. Use structure and 
 ## Avoid
 Surface-level takes, unsupported claims, oversimplification.
 
-## Tools
+## Tools (via mcporter → Bolta MCP)
 - \`bolta_draft_post\` — Draft long-form content
 - \`bolta_web_search\` — Research topics deeply
 - \`bolta_remember\` / \`bolta_recall\` — Build knowledge base
@@ -124,7 +127,7 @@ Contextual replies to existing conversations. Answer questions, share insights, 
 ## Avoid
 Spamming, hard-selling, being off-topic, mass-posting the same reply.
 
-## Tools
+## Tools (via mcporter → Bolta MCP)
 - \`bolta_web_search\` — Find relevant conversations
 - \`bolta_draft_post\` — Draft helpful replies
 - \`bolta_remember\` / \`bolta_recall\` — Track lead conversations
@@ -165,7 +168,7 @@ Quick responses to comments and DMs. Moderation actions with clear reasoning. Es
 ## Avoid
 Over-moderating, ignoring context, being robotic in responses.
 
-## Tools
+## Tools (via mcporter → Bolta MCP)
 - \`bolta_get_inbox\` — Check comments and messages
 - \`bolta_draft_post\` — Draft responses
 - \`bolta_remember\` — Log moderation decisions for consistency
@@ -204,7 +207,7 @@ Clear, precise, insight-focused. Data speaks, you translate.
 ## Style
 Weekly performance reports, trend analysis, content recommendations backed by data.
 
-## Tools
+## Tools (via mcporter → Bolta MCP)
 - \`bolta_analyze_post\` — Get post performance data
 - \`bolta_get_inbox\` — Review recent content
 - \`bolta_remember\` — Track metrics over time
@@ -245,7 +248,7 @@ Thoughtful replies to comments, mentions, and DMs. Start conversations, ask foll
 ## Avoid
 Generic "thanks!" replies, ignoring negative feedback, being robotic.
 
-## Tools
+## Tools (via mcporter → Bolta MCP)
 - \`bolta_get_inbox\` — Check mentions and comments
 - \`bolta_draft_post\` — Draft engaging replies
 - \`bolta_remember\` — Track ongoing conversations
@@ -286,7 +289,7 @@ Find relevant threads and conversations. Add genuine value. Never pitch directly
 ## Avoid
 Self-promotion, off-topic replies, generic comments, being a reply-guy.
 
-## Tools
+## Tools (via mcporter → Bolta MCP)
 - \`bolta_web_search\` — Find relevant conversations
 - \`bolta_draft_post\` — Draft expert replies
 - \`bolta_remember\` — Track conversation threads
@@ -327,7 +330,7 @@ Build-in-public posts, milestone updates, behind-the-scenes stories. Mix wins wi
 ## Avoid
 Humble-bragging, vague updates, polished corporate stories.
 
-## Tools
+## Tools (via mcporter → Bolta MCP)
 - \`bolta_draft_post\` — Draft story content
 - \`bolta_remember\` — Track milestones and journey
 - \`bolta_get_inbox\` — Reference recent content for continuity
