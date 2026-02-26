@@ -129,6 +129,7 @@ export class OpenClawManager {
     } catch (err) {
       throw new Error(`Failed to install OpenClaw: ${err.message}`);
     }
+    this.openclawBin = execSync('which openclaw', { encoding: 'utf-8' }).trim();
   }
 
   async update() {
