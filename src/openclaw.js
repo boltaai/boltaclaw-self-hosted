@@ -114,22 +114,40 @@ export class OpenClawManager {
 
   async install() {
     // Install OpenClaw locally into the state dir — no sudo, no global
-    if (this.verbose) console.log(chalk.gray('  Installing OpenClaw locally...'));
+    console.log(chalk.gray('  Installing OpenClaw locally into ' + this.stateDir + '...'));
+    mkdirSync(this.stateDir, { recursive: true });
+
+    // Create a package.json if missing (needed for local npm install)
+    const pkgPath = join(this.stateDir, 'package.json');
+    if (!existsSync(pkgPath)) {
+      writeFileSync(pkgPath, JSON.stringify({ name: 'openclaw-bolta', private: true }, null, 2));
+    }
+
     try {
-      mkdirSync(this.stateDir, { recursive: true });
       execSync(`npm install ${OPENCLAW_NPM_PACKAGE}`, {
         cwd: this.stateDir,
-        stdio: this.verbose ? 'inherit' : 'pipe',
+        stdio: 'inherit',
         timeout: 120000,
       });
-      this.openclawBin = join(this.stateDir, 'node_modules', '.bin', 'openclaw');
-      if (!existsSync(this.openclawBin)) {
-        throw new Error('openclaw binary not found after npm install');
-      }
     } catch (err) {
-      throw new Error(`Failed to install OpenClaw: ${err.message}`);
+      throw new Error(`npm install openclaw failed: ${err.message}`);
     }
-    this.openclawBin = execSync('which openclaw', { encoding: 'utf-8' }).trim();
+
+    // Find the binary
+    const localBin = join(this.stateDir, 'node_modules', '.bin', 'openclaw');
+    if (existsSync(localBin)) {
+      this.openclawBin = localBin;
+      return;
+    }
+
+    // Fallback: check if openclaw.mjs exists and create a wrapper
+    const ocMjs = join(this.stateDir, 'node_modules', 'openclaw', 'openclaw.mjs');
+    if (existsSync(ocMjs)) {
+      this.openclawBin = ocMjs;
+      return;
+    }
+
+    throw new Error(`OpenClaw installed but binary not found. Checked:\n  ${localBin}\n  ${ocMjs}`);
   }
 
   async update() {
