@@ -89,11 +89,23 @@ export class OpenClawManager {
 
   async check() {
     try {
-      const version = execSync('openclaw --version 2>/dev/null', {
+      // First just check if the binary exists
+      const bin = execSync('which openclaw 2>/dev/null || command -v openclaw 2>/dev/null', {
         encoding: 'utf-8',
-        timeout: 10000,
+        timeout: 5000,
       }).trim();
-      this.openclawBin = execSync('which openclaw 2>/dev/null', { encoding: 'utf-8' }).trim();
+      if (!bin) return { installed: false, version: null };
+      this.openclawBin = bin;
+
+      // Then try to get version (may fail if gateway is misconfigured, but binary exists)
+      let version = 'unknown';
+      try {
+        version = execSync('openclaw --version 2>/dev/null', {
+          encoding: 'utf-8',
+          timeout: 10000,
+        }).trim();
+      } catch { /* binary exists but version check failed — still installed */ }
+
       return { installed: true, version };
     } catch {
       return { installed: false, version: null };
@@ -107,10 +119,18 @@ export class OpenClawManager {
         stdio: this.verbose ? 'inherit' : 'pipe',
         timeout: 120000,
       });
-      this.openclawBin = execSync('which openclaw', { encoding: 'utf-8' }).trim();
-    } catch (err) {
-      throw new Error(`Failed to install OpenClaw: ${err.message}`);
+    } catch {
+      // Retry with sudo (macOS typically needs this for global installs)
+      try {
+        execSync(`sudo npm install -g ${OPENCLAW_NPM_PACKAGE}`, {
+          stdio: 'inherit',
+          timeout: 120000,
+        });
+      } catch (err) {
+        throw new Error(`Failed to install OpenClaw: ${err.message}`);
+      }
     }
+    this.openclawBin = execSync('which openclaw', { encoding: 'utf-8' }).trim();
   }
 
   async update() {
