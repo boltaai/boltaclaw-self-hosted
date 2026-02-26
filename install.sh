@@ -142,6 +142,7 @@ npm install --omit=dev || {
 }
 
 echo -e "  ${GRAY}Linking boltaclaw command...${RESET}"
+chmod +x "$INSTALL_DIR/src/cli.js"
 if npm link 2>&1; then
   true
 elif sudo npm link 2>&1; then
