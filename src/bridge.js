@@ -15,7 +15,7 @@
 import { WSClient } from './ws-client.js';
 import { Database } from './db.js';
 
-const BOLTA_WS_URL = process.env.BOLTA_WS_URL || 'wss://api.bolta.ai/ws/runner';
+const BOLTA_WS_URL = process.env.BOLTA_WS_URL || 'wss://platty.boltathread.com/ws/runner/';
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
 export class Bridge {
@@ -44,19 +44,26 @@ export class Bridge {
     this.ws.on('config_sync', (data) => this._onConfigSync(data));
     this.ws.on('ping', () => this.ws.send('pong', {}));
     this.ws.on('error', (data) => {
-      if (this.verbose) console.error(`  ❌ Server error: ${data.message || 'Unknown'}`);
+      console.error(`  ❌ Server error: ${data.message || 'Unknown'}`);
     });
 
-    // Reconnect handler
+    // Reconnect handler — use persistent runner_key (install token is burned after first handshake)
     this.ws.on('reconnected', () => {
-      const currentToken = this.config.get('runner_key') || this.config.get('install_token');
-      if (currentToken) this.ws.send('auth', { token: currentToken });
+      const runnerKey = this.config.get('runner_key');
+      const token = runnerKey || this.config.get('install_token');
+      console.log(`  🔄 Reconnecting with ${runnerKey ? 'runner_key' : 'install_token'}: ${token?.slice(0, 15)}...`);
+      if (token) this.ws.send('auth', { token });
     });
 
     await this.ws.connect();
 
+    // Small delay to ensure WS is fully ready before sending auth
+    await new Promise(r => setTimeout(r, 100));
+
     // Authenticate (consumer expects auth as first message)
+    console.log('  🔑 Sending auth...');
     this.ws.send('auth', { token });
+    console.log('  🔑 Auth sent, waiting for handshake...');
 
     this._startHeartbeat();
   }
@@ -69,11 +76,20 @@ export class Bridge {
   // --- Event Handlers ---
 
   _onHandshake(data) {
+    console.log('  📨 Handshake data keys:', Object.keys(data));
     // Install token → persistent runner key swap
     if (data.runner_key) {
-      this.config.set('runner_key', data.runner_key);
-      this.config.delete('install_token'); // Burn the install token
-      if (this.verbose) console.log('  🔑 Runner key received, install token burned');
+      try {
+        this.config.set('runner_key', data.runner_key);
+        this.config.delete('install_token'); // Burn the install token
+        // Verify it was saved
+        const saved = this.config.get('runner_key');
+        console.log(`  🔑 Runner key saved: ${data.runner_key.slice(0, 12)}... (verified: ${saved ? 'yes' : 'NO'})`);
+      } catch (err) {
+        console.error(`  ❌ Failed to save runner_key: ${err.message}`);
+      }
+    } else {
+      console.log('  ⚠ No runner_key in handshake response. Data:', JSON.stringify(data).slice(0, 200));
     }
     if (data.workspace_id) {
       this.config.set('workspace_id', data.workspace_id);

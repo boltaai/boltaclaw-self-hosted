@@ -825,22 +825,19 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
   }
 
   async gatewayStatus() {
+    const port = this.config.get('gateway_port') || '18789';
+
+    // Simple TCP check — is anything listening on the port?
     try {
-      const port = this.config.get('gateway_port') || '18789';
-      const token = this.config.get('gateway_token') || '';
-
-      const bin = this.openclawBin || 'openclaw';
-      const result = execSync(
-        `"${bin}" --profile ${this.profileName} gateway call health --token "${token}" --json 2>/dev/null`,
-        {
-          encoding: 'utf-8',
-          env: this._env(),
-          timeout: 5000,
-        }
-      );
-
-      const data = JSON.parse(result);
-      return { running: data?.ok === true, data };
+      const net = await import('net');
+      return await new Promise((resolve) => {
+        const sock = new net.default.Socket();
+        sock.setTimeout(2000);
+        sock.on('connect', () => { sock.destroy(); resolve({ running: true }); });
+        sock.on('timeout', () => { sock.destroy(); resolve({ running: false }); });
+        sock.on('error', () => { sock.destroy(); resolve({ running: false }); });
+        sock.connect(parseInt(port, 10), '127.0.0.1');
+      });
     } catch {
       return { running: false };
     }
