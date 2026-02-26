@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  boltaclaw:
+    build: .
+    container_name: boltaclaw
+    restart: unless-stopped
+    environment:
+      - BOLTA_TOKEN=${BOLTA_TOKEN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - BOLTACLAW_DATA_DIR=/data
+    volumes:
+      - boltaclaw-data:/data
+    command: ["--token=${BOLTA_TOKEN}"]
+    # No ports exposed — outbound WSS only
+    # Uncomment below to expose OpenClaw gateway for local debugging:
+    # ports:
+    #   - "18789:18789"
+
+volumes:
+  boltaclaw-data:

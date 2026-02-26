@@ -40,7 +40,16 @@ Get your workspace token from **Settings → Self-Hosted** in the [Bolta dashboa
 ### Manual Install
 
 ```bash
+# Install OpenClaw (the agent runtime)
+npm install -g openclaw
+
+# Install BoltaClaw (the Bolta bridge)
 npm install -g @boltaai/boltaclaw
+
+# Interactive setup
+boltaclaw setup --token=YOUR_WORKSPACE_TOKEN
+
+# Or start directly
 boltaclaw start --token=YOUR_WORKSPACE_TOKEN
 ```
 
@@ -57,10 +66,25 @@ docker run -d \
 ## How It Works
 
 1. **You install the engine** on your machine (Mac, Linux, Windows WSL, Docker, VPS — anywhere)
-2. **The engine connects outbound** to Bolta Cloud via secure WebSocket (no port-forwarding needed)
-3. **Bolta dashboard detects the connection** and lights up green
-4. **You configure your agents** from the Bolta UI — voice, schedule, social accounts
-5. **Jobs run locally** — LLM calls use your own API key (BYOK), drafts stay on your machine until you approve
+2. **The install script sets up [OpenClaw](https://openclaw.ai)** — the open-source agent runtime that handles LLM calls, tool execution, memory, scheduling, and channel integrations
+3. **BoltaClaw bridges OpenClaw to Bolta Cloud** — an outbound WebSocket connection (no port-forwarding needed)
+4. **Bolta dashboard detects the connection** and lights up green
+5. **You configure your agents** from the Bolta UI — voice, schedule, social accounts
+6. **Jobs run locally** through OpenClaw — LLM calls use your own API key (BYOK), drafts stay on your machine until you approve
+
+### What's OpenClaw?
+
+[OpenClaw](https://openclaw.ai) is the open-source agent runtime that powers the local engine. It provides:
+
+- **Agent gateway** — WebSocket server for agent sessions with multi-turn conversations
+- **Tool execution** — Sandboxed shell, browser automation, file I/O
+- **Memory** — LanceDB vector store for persistent agent memory
+- **Channels** — Telegram, Discord, Slack, WhatsApp integrations
+- **Skills** — Extensible skill system (bolta-skills + community skills via ClawHub)
+- **Scheduling** — Cron jobs for recurring agent tasks
+- **Heartbeats** — Proactive agent check-ins
+
+BoltaClaw is a thin bridge layer that connects OpenClaw to your Bolta workspace.
 
 ## What Runs Where
 
@@ -73,19 +97,28 @@ docker run -d \
 | Post approval | Bolta Cloud (Inbox) | Workflow — review before publishing |
 | Publishing | Bolta Cloud (via social APIs) | Reliability — managed API connections |
 
-## Configuration
-
-After first connection, configure via the Bolta dashboard or locally:
+## CLI Commands
 
 ```bash
-# Set your Claude API key (stored locally only)
-boltaclaw config set ANTHROPIC_API_KEY sk-ant-...
+# Start the engine (connects to Bolta Cloud)
+boltaclaw start --token=YOUR_TOKEN
 
-# Connect a Telegram bot (optional)
-boltaclaw config set TELEGRAM_BOT_TOKEN 123456:ABC...
+# Interactive setup wizard
+boltaclaw setup
 
-# Check status
+# Check engine status (OpenClaw, gateway, connection, keys)
 boltaclaw status
+
+# Configure locally stored settings
+boltaclaw config set ANTHROPIC_API_KEY sk-ant-...   # BYOK — never leaves your machine
+boltaclaw config set TELEGRAM_BOT_TOKEN 123456:ABC... # Optional chat channel
+boltaclaw config get ANTHROPIC_API_KEY
+
+# Tail OpenClaw gateway logs
+boltaclaw logs -f
+
+# Update OpenClaw + bolta-skills
+boltaclaw update
 ```
 
 ## Security
