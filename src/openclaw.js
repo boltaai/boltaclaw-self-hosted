@@ -171,7 +171,10 @@ export class OpenClawManager {
     // 5. Install/update bolta-skills
     this._installSkills();
 
-    // 6. Configure channels (Telegram, Slack)
+    // 6. Configure Bolta MCP (71 tools via mcporter)
+    this._configureMCP();
+
+    // 7. Configure channels (Telegram, Slack)
     this._configureChannels();
 
     if (this.verbose) {
@@ -327,6 +330,71 @@ export class OpenClawManager {
     }
   }
 
+  // ─── MCP Configuration ───────────────────────────────────────
+
+  _configureMCP() {
+    // mcporter connects OpenClaw agents to Bolta's 71 MCP tools
+    // Config lives in the workspace at config/mcporter.json
+    const mcpConfigDir = join(this.workspaceDir, 'config');
+    mkdirSync(mcpConfigDir, { recursive: true });
+
+    const mcpConfigPath = join(mcpConfigDir, 'mcporter.json');
+
+    // Build the Bolta API key header for authenticated MCP calls
+    const boltaApiKey = this.config.get('BOLTA_API_KEY') || '';
+    const workspaceId = this.config.get('workspace_id') || '';
+
+    const mcpConfig = {
+      servers: {
+        bolta: {
+          url: BOLTA_MCP_URL,
+          transport: 'http',
+          description: 'Bolta AI — 71 social media agent tools (drafting, scheduling, analytics, memory, inbox)',
+          headers: {},
+        },
+      },
+    };
+
+    // Add auth headers if we have API key
+    if (boltaApiKey) {
+      mcpConfig.servers.bolta.headers['X-API-Key'] = boltaApiKey;
+    }
+    if (workspaceId) {
+      mcpConfig.servers.bolta.headers['X-Workspace-Id'] = workspaceId;
+    }
+
+    writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2));
+
+    // Enable mcporter skill in OpenClaw config
+    let config;
+    try {
+      config = JSON.parse(readFileSync(this.configPath, 'utf-8'));
+    } catch { return; }
+
+    if (!config.skills) config.skills = { entries: {} };
+    config.skills.entries.mcporter = { enabled: true };
+    writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+
+    // Install mcporter globally if not present
+    try {
+      execSync('which mcporter 2>/dev/null', { encoding: 'utf-8' });
+    } catch {
+      try {
+        execSync('npm install -g mcporter', {
+          stdio: this.verbose ? 'inherit' : 'pipe',
+          timeout: 60000,
+        });
+        if (this.verbose) console.log(chalk.green('  ✓ mcporter installed'));
+      } catch {
+        if (this.verbose) console.log(chalk.yellow('  ⚠ Could not install mcporter — MCP tools may not be available'));
+      }
+    }
+
+    if (this.verbose) {
+      console.log(chalk.green(`  ✓ Bolta MCP configured (${BOLTA_MCP_URL})`));
+    }
+  }
+
   _configureChannels() {
     // Read current config
     let config;
@@ -356,6 +424,12 @@ export class OpenClawManager {
       if (!config.plugins) config.plugins = { slots: {}, entries: {} };
       config.plugins.entries.telegram = { enabled: true };
       changed = true;
+
+      // Write Telegram credentials for OpenClaw's native channel system
+      const tgCreds = join(this.credentialsDir, 'telegram-allowFrom.json');
+      if (allowFrom.length > 0 && !existsSync(tgCreds)) {
+        writeFileSync(tgCreds, JSON.stringify(allowFrom, null, 2));
+      }
 
       if (this.verbose) {
         console.log(chalk.green(`  ✓ Telegram configured${allowFrom.length ? ` (allowlist: ${allowFrom.join(', ')})` : ' (open DMs)'}`));
@@ -479,18 +553,53 @@ account management, and direct integrations.
 
     writeIfMissing('TOOLS.md', `# TOOLS.md — Tool Notes
 
-## Bolta MCP
+## Bolta MCP (via mcporter)
 - **URL:** ${BOLTA_MCP_URL}
-- **Protocol:** SSE (StreamableHTTP)
-- **Tools:** 71 (content, scheduling, analytics, memory, inbox, accounts)
+- **Protocol:** HTTP/SSE (StreamableHTTP)
+- **Config:** ./config/mcporter.json
+- **71 tools** organized by category:
+
+### Content Creation
+- \`bolta.draft-post\` — Draft content for any platform
+- \`bolta.generate-posts\` — Generate multiple posts at once
+- \`bolta.enhance-post\` — Improve existing content
+
+### Scheduling & Publishing
+- \`bolta.schedule-post\` — Schedule posts for optimal times
+- \`bolta.approve-post\` — Approve drafts for publishing
+- \`bolta.get-inbox\` — Check pending content in inbox
+
+### Analytics
+- \`bolta.analyze-post\` — Get performance metrics
+- \`bolta.get-analytics\` — Dashboard-level analytics
+
+### Memory
+- \`bolta.remember\` — Store persistent memory (brand voice, lessons)
+- \`bolta.recall\` — Retrieve stored memory
+
+### Accounts & Workspace
+- \`bolta.list-accounts\` — List connected social accounts
+- \`bolta.get-workspace\` — Workspace configuration
+
+### Research
+- \`bolta.web-search\` — Search the web for trends and topics
+
+To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
 
 ## Bolta API
 - **Base URL:** ${BOLTA_API_URL}
-- **Auth:** Workspace API key (set in dashboard)
+- **Auth:** Workspace API key via X-API-Key header
 
-## Bolta Skills
+## Bolta Skills (local)
 - **Location:** ./skills/ (ClawHub installed)
 - **Source:** ${BOLTA_SKILLS_CLAWHUB_SLUG}
+- 37 skill documents for agent reference
+
+## Telegram
+- If configured, agents respond to DMs via the Telegram bot
+- Allowlist controls who can chat with agents
+- Set bot token: \`boltaclaw config set TELEGRAM_BOT_TOKEN <token>\`
+- Set allowlist: \`boltaclaw config set TELEGRAM_USER_ID <your_id>\`
 `);
 
     writeIfMissing('HEARTBEAT.md', `# HEARTBEAT.md

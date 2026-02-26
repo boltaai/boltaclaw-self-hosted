@@ -74,14 +74,23 @@ export async function setup(opts = {}) {
 
   // Step 3: Telegram (optional)
   console.log(chalk.white.bold('  Step 3: Telegram Bot (optional)'));
-  console.log(chalk.gray('  Connect a Telegram bot to chat with your agents.\n'));
+  console.log(chalk.gray('  Connect a Telegram bot to chat with your agents from your phone.'));
+  console.log(chalk.gray('  Create a bot via @BotFather on Telegram.\n'));
 
   const telegramToken = await ask(rl, chalk.cyan('  Telegram bot token (or press Enter to skip): '));
   if (telegramToken) {
     config.set('TELEGRAM_BOT_TOKEN', telegramToken);
-    console.log(chalk.green('  ✓ Telegram bot configured\n'));
+    console.log(chalk.green('  ✓ Telegram bot token saved'));
+
+    const tgUserId = await ask(rl, chalk.cyan('  Your Telegram user ID (for allowlist, or press Enter to allow all): '));
+    if (tgUserId) {
+      config.set('TELEGRAM_USER_ID', tgUserId);
+      console.log(chalk.green(`  ✓ Allowlisted Telegram ID: ${tgUserId}\n`));
+    } else {
+      console.log(chalk.gray('  DMs open to all (you can restrict later via config).\n'));
+    }
   } else {
-    console.log(chalk.gray('  Skipped.\n'));
+    console.log(chalk.gray('  Skipped — you can add Telegram later.\n'));
   }
 
   // Step 4: Check OpenClaw installation

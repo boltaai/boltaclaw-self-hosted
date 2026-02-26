@@ -78,9 +78,13 @@ export class Bridge {
     if (data.workspace_id) {
       this.config.set('workspace_id', data.workspace_id);
     }
+    // Store Bolta API key for MCP
+    if (data.api_key) {
+      this.config.set('BOLTA_API_KEY', data.api_key);
+    }
     // Sync any config from cloud
     if (data.config) {
-      this._applyCloudConfig(data.config);
+      this.ocManager.applyCloudConfig(data.config);
     }
     console.log(`  ✅ Handshake complete — workspace: ${data.workspace_id}`);
   }
@@ -144,9 +148,15 @@ export class Bridge {
 
   _onConfigSync(data) {
     if (data.config) {
+      // Store Bolta API key if provided (for MCP auth)
+      if (data.config.api_key) {
+        this.config.set('BOLTA_API_KEY', data.config.api_key);
+      }
       // Apply to OpenClaw workspace files (SOUL.md, USER.md, TOOLS.md)
       this.ocManager.applyCloudConfig(data.config);
-      console.log('  🔄 Config synced from Bolta Cloud → OpenClaw workspace updated');
+      // Re-configure MCP with new credentials
+      this.ocManager._configureMCP();
+      console.log('  🔄 Config synced from Bolta Cloud → OpenClaw workspace + MCP updated');
     }
   }
 

@@ -3,8 +3,8 @@ FROM node:20-slim
 # Install git (needed for bolta-skills)
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-# Install OpenClaw globally
-RUN npm install -g openclaw
+# Install OpenClaw + mcporter globally
+RUN npm install -g openclaw mcporter
 
 # Install BoltaClaw
 WORKDIR /app
