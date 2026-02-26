@@ -2,6 +2,7 @@
   "name": "@boltaai/boltaclaw",
   "version": "0.1.0",
   "description": "Bolta OpenClaw Engine — run your AI social media agents locally",
+  "type": "module",
   "main": "src/index.js",
   "bin": {
     "boltaclaw": "src/cli.js"
