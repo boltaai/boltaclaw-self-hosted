@@ -14,6 +14,7 @@
 
 import { WSClient } from './ws-client.js';
 import { Database } from './db.js';
+import { resolveProviderConfig } from './llm.js';
 
 const BOLTA_WS_URL = process.env.BOLTA_WS_URL || 'wss://platty.boltathread.com/ws/runner/';
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -168,6 +169,28 @@ export class Bridge {
       if (data.config.api_key) {
         this.config.set('BOLTA_API_KEY', data.config.api_key);
       }
+
+      // Store LLM API key and provider if provided
+      if (data.config.llm_api_key && data.config.llm_provider) {
+        const { envKey, model, provider } = resolveProviderConfig({
+          provider: data.config.llm_provider,
+          model: data.config.llm_model,
+        });
+        if (envKey) {
+          this.config.set(envKey, data.config.llm_api_key);
+          this.config.set('MODEL_PRIMARY', model);
+          const redacted = data.config.llm_api_key.substring(0, 8) + '...';
+          console.log(`  🔑 LLM API key stored: ${envKey} = ${redacted} (provider: ${provider}, model: ${model})`);
+        }
+      }
+
+      // Store Telegram bot token if provided
+      if (data.config.telegram_bot_token) {
+        this.config.set('TELEGRAM_BOT_TOKEN', data.config.telegram_bot_token);
+        const redacted = data.config.telegram_bot_token.substring(0, 8) + '...';
+        console.log(`  🔑 Telegram bot token stored: ${redacted}`);
+      }
+
       // Apply to OpenClaw workspace files (SOUL.md, USER.md, TOOLS.md)
       this.ocManager.applyCloudConfig(data.config);
       // Re-configure MCP with new credentials

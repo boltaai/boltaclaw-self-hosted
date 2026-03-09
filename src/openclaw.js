@@ -32,6 +32,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import chalk from 'chalk';
 import { AGENT_PRESETS, getAgentIds, buildCronJobs } from './agents.js';
+import { resolveProviderConfig } from './llm.js';
 
 const OPENCLAW_NPM_PACKAGE = 'openclaw';
 const BOLTA_SKILLS_CLAWHUB_SLUG = 'MaxFritzhand/bolta-skills-index';
@@ -1046,6 +1047,26 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
 - **Notes:** ${cloudConfig.user.notes || 'Configure your profile in the Bolta dashboard.'}
 `;
       writeFileSync(join(this.workspaceDir, 'USER.md'), userMd);
+    }
+
+    // Update LLM API key and provider
+    if (cloudConfig.llm_api_key && cloudConfig.llm_provider) {
+      const { envKey, model, provider } = resolveProviderConfig({
+        provider: cloudConfig.llm_provider,
+        model: cloudConfig.llm_model,
+      });
+      if (envKey && model) {
+        this.config.set(envKey, cloudConfig.llm_api_key);
+        this.config.set('MODEL_PRIMARY', model);
+        if (this.verbose) {
+          console.log(chalk.gray(`  LLM config applied: provider=${provider}, model=${model}`));
+        }
+      }
+    }
+
+    // Update Telegram bot token
+    if (cloudConfig.telegram_bot_token) {
+      this.config.set('TELEGRAM_BOT_TOKEN', cloudConfig.telegram_bot_token);
     }
 
     // Update social accounts context → append to TOOLS.md
