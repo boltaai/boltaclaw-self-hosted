@@ -3,12 +3,17 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { setup } from './setup.js';
+import { setup, onboard } from './setup.js';
 import { Bridge } from './bridge.js';
 import { Config } from './config.js';
 import { OpenClawManager } from './openclaw.js';
 
 const program = new Command();
+const DEFAULT_PRIMARY_MODEL = 'anthropic/claude-sonnet-4-6';
+
+function isValidWorkspaceToken(token) {
+  return typeof token === 'string' && (token.startsWith('workspace_live_') || token.startsWith('rk_'));
+}
 
 program
   .name('boltaclaw')
@@ -29,8 +34,18 @@ program
 
     // If token provided, store it for handshake
     if (opts.token) {
-      config.set('install_token', opts.token);
-      console.log(chalk.green('  ✓ Workspace token saved'));
+      if (!isValidWorkspaceToken(opts.token)) {
+        console.log(chalk.red('  ✗ Invalid token format.'));
+        console.log(chalk.gray('    Expected workspace_live_... or rk_...\n'));
+        process.exit(1);
+      }
+      if (opts.token.startsWith('rk_')) {
+        config.set('runner_key', opts.token);
+        console.log(chalk.green('  ✓ Runner key saved'));
+      } else {
+        config.set('install_token', opts.token);
+        console.log(chalk.green('  ✓ Workspace token saved'));
+      }
     }
 
     // Check for existing runner key or install token
@@ -43,9 +58,22 @@ program
       console.log(chalk.gray('    Get your token from Settings → Self-Hosted in the Bolta dashboard.\n'));
       process.exit(1);
     }
+    if (runnerKey && !isValidWorkspaceToken(runnerKey)) {
+      console.log(chalk.red('  ✗ Stored runner_key has invalid format.'));
+      console.log(chalk.gray('    Reset with: boltaclaw start --token=rk_...\n'));
+      process.exit(1);
+    }
+    if (installToken && !isValidWorkspaceToken(installToken)) {
+      console.log(chalk.red('  ✗ Stored install_token has invalid format.'));
+      console.log(chalk.gray('    Reset with: boltaclaw start --token=workspace_live_...\n'));
+      process.exit(1);
+    }
 
     // Step 1: Ensure OpenClaw is installed and configured
     const ocManager = new OpenClawManager(config, { verbose: opts.verbose });
+    if (!config.get('MODEL_PRIMARY')) {
+      config.set('MODEL_PRIMARY', DEFAULT_PRIMARY_MODEL);
+    }
 
     const spinner = ora('Checking OpenClaw installation...').start();
     const ocStatus = await ocManager.check();
@@ -63,6 +91,7 @@ program
     await ocManager.configure({
       port: parseInt(opts.port, 10),
       anthropicKey: config.get('ANTHROPIC_API_KEY'),
+      modelPrimary: config.get('MODEL_PRIMARY') || DEFAULT_PRIMARY_MODEL,
     });
     configSpinner.succeed('OpenClaw configured');
 
@@ -108,6 +137,23 @@ program
   .option('--token <token>', 'Workspace token')
   .action(async (opts) => {
     await setup(opts);
+  });
+
+program
+  .command('onboard')
+  .description('Guided onboarding (token, API key, model, OpenClaw profile)')
+  .option('--token <token>', 'Workspace token (workspace_live_... or rk_...)')
+  .option('--model <model>', 'Default model', 'anthropic/claude-sonnet-4-6')
+  .option('--verbose', 'Enable verbose logging')
+  .option('--no-openclaw-onboard', 'Skip running `openclaw --profile bolta onboard`')
+  .option('--port <port>', 'OpenClaw gateway port', '18789')
+  .action(async (opts) => {
+    try {
+      await onboard(opts);
+    } catch (err) {
+      console.error(chalk.red(`\n  ✗ Onboarding failed: ${err.message}\n`));
+      process.exit(1);
+    }
   });
 
 program

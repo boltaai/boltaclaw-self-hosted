@@ -490,7 +490,7 @@ export function buildCronJobs(timezone = 'America/New_York') {
         payload: {
           kind: 'agentTurn',
           message: preset.runInstructions || `Run your scheduled task. Check HEARTBEAT.md for guidance.`,
-          model: 'anthropic/claude-sonnet-4-5',
+          model: 'anthropic/claude-sonnet-4-6',
           timeoutSeconds: 300,
         },
         sessionTarget: 'isolated',

@@ -21,6 +21,7 @@ const DEFAULT_DATA_DIR = join(
  *   - gateway_port    — local OpenClaw gateway port
  *   - ANTHROPIC_API_KEY — Claude API key (BYOK, never leaves machine)
  *   - OPENAI_API_KEY    — OpenAI key (optional, for embeddings)
+ *   - MODEL_PRIMARY     — Preferred default model (e.g. anthropic/claude-sonnet-4-6)
  *   - TELEGRAM_BOT_TOKEN — Telegram bot token (optional)
  *   - TELEGRAM_USER_ID   — Telegram user ID for allowlist
  *   - SLACK_BOT_TOKEN    — Slack bot token (optional)

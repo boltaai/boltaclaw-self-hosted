@@ -106,11 +106,15 @@ boltaclaw start --token=YOUR_TOKEN
 # Interactive setup wizard
 boltaclaw setup
 
+# Guided onboarding (includes optional OpenClaw native onboard)
+boltaclaw onboard --token=YOUR_TOKEN
+
 # Check engine status (OpenClaw, gateway, connection, keys)
 boltaclaw status
 
 # Configure locally stored settings
 boltaclaw config set ANTHROPIC_API_KEY sk-ant-...   # BYOK — never leaves your machine
+boltaclaw config set MODEL_PRIMARY anthropic/claude-sonnet-4-6
 boltaclaw config set TELEGRAM_BOT_TOKEN 123456:ABC... # Optional chat channel
 boltaclaw config get ANTHROPIC_API_KEY
 

@@ -27,7 +27,7 @@
  *     logs/                   — gateway logs
  */
 
-import { execSync, spawn } from 'child_process';
+import { execSync, spawn, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import chalk from 'chalk';
@@ -38,6 +38,7 @@ const BOLTA_SKILLS_CLAWHUB_SLUG = 'MaxFritzhand/bolta-skills-index';
 const BOLTA_SKILLS_REPO = 'https://github.com/boltaai/bolta-skills.git';
 const BOLTA_MCP_URL = 'https://mcp.bolta.ai/mcp';
 const BOLTA_API_URL = 'https://platty.boltathread.com/api/v1';
+const DEFAULT_PRIMARY_MODEL = 'anthropic/claude-sonnet-4-6';
 
 export class OpenClawManager {
   constructor(config, opts = {}) {
@@ -170,7 +171,7 @@ export class OpenClawManager {
    * Full configuration of OpenClaw for Bolta use.
    * Creates: config file, agent dirs, workspace files, auth profiles, skills.
    */
-  async configure({ port = 18789, anthropicKey = null, openaiKey = null } = {}) {
+  async configure({ port = 18789, anthropicKey = null, openaiKey = null, modelPrimary = null } = {}) {
     // Create directory structure — one workspace shared by all agents,
     // but each agent gets its own agent dir for auth/sessions
     const dirs = [
@@ -193,7 +194,7 @@ export class OpenClawManager {
     }
 
     // 1. Write main OpenClaw config (all 8 agents registered)
-    this._writeMainConfig(port);
+    this._writeMainConfig(port, modelPrimary);
 
     // 2. Write auth profiles for each agent (shared API keys)
     for (const slug of getAgentIds()) {
@@ -226,8 +227,9 @@ export class OpenClawManager {
     }
   }
 
-  _writeMainConfig(port) {
+  _writeMainConfig(port, modelPrimary = null) {
     const gatewayToken = this._generateToken();
+    const primaryModel = this._resolvePrimaryModel(modelPrimary);
 
     const config = {
       meta: {
@@ -239,7 +241,7 @@ export class OpenClawManager {
       agents: {
         defaults: {
           model: {
-            primary: 'anthropic/claude-sonnet-4-5',
+            primary: primaryModel,
           },
           workspace: this.workspaceDir,
           contextPruning: {
@@ -259,7 +261,7 @@ export class OpenClawManager {
         },
         list: getAgentIds().map(slug => ({
           id: slug,
-          model: { primary: 'anthropic/claude-sonnet-4-5' },
+          model: { primary: primaryModel },
         })),
       },
       messages: {
@@ -297,6 +299,30 @@ export class OpenClawManager {
     writeFileSync(this.configPath, JSON.stringify(config, null, 2));
   }
 
+  _resolvePrimaryModel(explicitModel = null) {
+    if (explicitModel && typeof explicitModel === 'string' && explicitModel.trim()) {
+      return explicitModel.trim();
+    }
+
+    const configuredModel = this.config.get('MODEL_PRIMARY');
+    if (configuredModel && typeof configuredModel === 'string' && configuredModel.trim()) {
+      return configuredModel.trim();
+    }
+
+    // Preserve model choice from existing OpenClaw config when available.
+    try {
+      const existing = JSON.parse(readFileSync(this.configPath, 'utf-8'));
+      const existingPrimary = existing?.agents?.defaults?.model?.primary;
+      if (existingPrimary && typeof existingPrimary === 'string' && existingPrimary.trim()) {
+        return existingPrimary.trim();
+      }
+    } catch {
+      // Fall through to default.
+    }
+
+    return DEFAULT_PRIMARY_MODEL;
+  }
+
   _writeAuthProfiles(anthropicKey, openaiKey, agentSlug = null) {
     // OpenClaw stores API keys in agents/<id>/agent/auth-profiles.json
     const agentBase = agentSlug
@@ -309,9 +335,16 @@ export class OpenClawManager {
     try {
       profiles = JSON.parse(readFileSync(authProfilesPath, 'utf-8'));
     } catch { /* fresh install */ }
+    if (!profiles || typeof profiles !== 'object') profiles = {};
+    if (!profiles.profiles || typeof profiles.profiles !== 'object') profiles.profiles = {};
+    if (!profiles.lastGood || typeof profiles.lastGood !== 'object') profiles.lastGood = {};
+    if (!profiles.usageStats || typeof profiles.usageStats !== 'object') profiles.usageStats = {};
 
-    // Anthropic key (BYOK)
-    const key = anthropicKey || this.config.get('ANTHROPIC_API_KEY');
+    // Anthropic key (BYOK). If not present in Boltaclaw config, try to inherit
+    // an existing profile from previously configured OpenClaw agent stores.
+    const key = anthropicKey
+      || this.config.get('ANTHROPIC_API_KEY')
+      || this._findProviderKeyInAuthProfiles('anthropic', [authProfilesPath, ...this._authProfileFallbackCandidates(agentSlug)]);
     if (key) {
       profiles.profiles['anthropic:bolta'] = {
         type: 'api_key',
@@ -339,6 +372,54 @@ export class OpenClawManager {
     if (!existsSync(authPath)) {
       writeFileSync(authPath, '{}');
     }
+  }
+
+  _authProfileFallbackCandidates(agentSlug = null) {
+    const candidates = [];
+
+    // Legacy/default bolta agent path.
+    candidates.push(join(this.agentDir, 'agent', 'auth-profiles.json'));
+
+    // Try all known local agent stores (including requested agent first).
+    const slugs = getAgentIds();
+    if (agentSlug && slugs.includes(agentSlug)) {
+      candidates.push(join(this.stateDir, 'agents', agentSlug, 'agent', 'auth-profiles.json'));
+    }
+    for (const slug of slugs) {
+      candidates.push(join(this.stateDir, 'agents', slug, 'agent', 'auth-profiles.json'));
+    }
+
+    // Deduplicate while preserving order.
+    return [...new Set(candidates)];
+  }
+
+  _findProviderKeyInAuthProfiles(provider, candidates = []) {
+    for (const p of candidates) {
+      if (!p || !existsSync(p)) continue;
+
+      try {
+        const data = JSON.parse(readFileSync(p, 'utf-8'));
+        const profiles = data?.profiles || {};
+        const keys = Object.keys(profiles);
+
+        // Prefer profile selected in lastGood, then fallback to first matching provider profile.
+        const preferredId = data?.lastGood?.[provider];
+        if (preferredId && profiles[preferredId]?.key) {
+          return profiles[preferredId].key;
+        }
+
+        for (const profileId of keys) {
+          const profile = profiles[profileId];
+          if (profile?.provider === provider && profile?.key) {
+            return profile.key;
+          }
+        }
+      } catch {
+        // Ignore malformed files and continue search.
+      }
+    }
+
+    return null;
   }
 
   // ─── Per-Agent Workspace Files ────────────────────────────────
@@ -782,7 +863,7 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
 
       // Wait for gateway to be ready (poll health)
       let attempts = 0;
-      const maxAttempts = 20;
+      const maxAttempts = 90; // 45s max wait; OpenClaw startup can exceed 10s on first run.
       const pollInterval = setInterval(async () => {
         attempts++;
         const s = await this.gatewayStatus();
@@ -849,6 +930,29 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
     if (follow) args.push('-f');
 
     spawn(bin, args, { env: this._env(), stdio: 'inherit' });
+  }
+
+  async runOnboard() {
+    const status = await this.check();
+    if (!status.installed) {
+      await this.install();
+    }
+
+    const bin = this.openclawBin || 'openclaw';
+    const result = spawnSync(
+      bin,
+      ['--profile', this.profileName, 'onboard'],
+      {
+        env: this._env(),
+        stdio: 'inherit',
+      }
+    );
+    if (result.error) {
+      throw new Error(`Failed to launch OpenClaw onboard: ${result.error.message}`);
+    }
+    if (typeof result.status === 'number' && result.status !== 0) {
+      throw new Error(`OpenClaw onboard exited with code ${result.status}`);
+    }
   }
 
   // ─── Agent Execution ────────────────────────────────────────────

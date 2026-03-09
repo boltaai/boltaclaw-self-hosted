@@ -14,12 +14,18 @@ import { createInterface } from 'readline';
 import { Config } from './config.js';
 import { OpenClawManager } from './openclaw.js';
 
+const DEFAULT_PRIMARY_MODEL = 'anthropic/claude-sonnet-4-6';
+
 function ask(rl, question, opts = {}) {
   return new Promise((resolve) => {
     rl.question(question, (answer) => {
       resolve(answer.trim());
     });
   });
+}
+
+function isValidWorkspaceToken(token) {
+  return typeof token === 'string' && (token.startsWith('workspace_live_') || token.startsWith('rk_'));
 }
 
 export async function setup(opts = {}) {
@@ -38,14 +44,12 @@ export async function setup(opts = {}) {
     token = await ask(rl, chalk.cyan('  Workspace token: '));
   }
 
-  if (!token.startsWith('workspace_live_') && !token.startsWith('rk_')) {
-    console.log(chalk.yellow('  ⚠ Token format looks unusual. Expected workspace_live_... or rk_...'));
-    const proceed = await ask(rl, chalk.cyan('  Continue anyway? (y/n): '));
-    if (proceed.toLowerCase() !== 'y') {
-      console.log(chalk.gray('\n  Setup cancelled.\n'));
-      rl.close();
-      return;
-    }
+  if (!isValidWorkspaceToken(token)) {
+    console.log(chalk.red('  ✗ A valid token is required before setup can continue.'));
+    console.log(chalk.gray('    Expected workspace_live_... or rk_...'));
+    console.log(chalk.gray('\n  Setup cancelled.\n'));
+    rl.close();
+    return;
   }
 
   if (token.startsWith('rk_')) {
@@ -93,25 +97,27 @@ export async function setup(opts = {}) {
     console.log(chalk.gray('  Skipped — you can add Telegram later.\n'));
   }
 
-  // Step 4: Check OpenClaw installation
-  console.log(chalk.white.bold('  Step 4: Checking OpenClaw...\n'));
-  const ocManager = new OpenClawManager(config, { verbose: false });
-  const status = await ocManager.check();
+  if (!opts.skipOpenClawCheck) {
+    // Step 4: Check OpenClaw installation
+    console.log(chalk.white.bold('  Step 4: Checking OpenClaw...\n'));
+    const ocManager = new OpenClawManager(config, { verbose: false });
+    const status = await ocManager.check();
 
-  if (status.installed) {
-    console.log(chalk.green(`  ✓ OpenClaw ${status.version} found\n`));
-  } else {
-    const installOc = await ask(rl, chalk.cyan('  OpenClaw not found. Install it now? (y/n): '));
-    if (installOc.toLowerCase() === 'y') {
-      const spinner = ora('  Installing OpenClaw...').start();
-      try {
-        await ocManager.install();
-        spinner.succeed('  OpenClaw installed');
-      } catch (err) {
-        spinner.fail(`  Installation failed: ${err.message}`);
+    if (status.installed) {
+      console.log(chalk.green(`  ✓ OpenClaw ${status.version} found\n`));
+    } else {
+      const installOc = await ask(rl, chalk.cyan('  OpenClaw not found. Install it now? (y/n): '));
+      if (installOc.toLowerCase() === 'y') {
+        const spinner = ora('  Installing OpenClaw...').start();
+        try {
+          await ocManager.install();
+          spinner.succeed('  OpenClaw installed');
+        } catch (err) {
+          spinner.fail(`  Installation failed: ${err.message}`);
+        }
       }
+      console.log();
     }
-    console.log();
   }
 
   // Done
@@ -124,4 +130,50 @@ export async function setup(opts = {}) {
   console.log(chalk.gray('  Happy posting! 🚀\n'));
 
   rl.close();
+}
+
+export async function onboard(opts = {}) {
+  const config = new Config();
+  const ocManager = new OpenClawManager(config, { verbose: !!opts.verbose });
+
+  console.log(chalk.blue.bold('\n  ⚡ Bolta OpenClaw Engine — Onboard\n'));
+  console.log(chalk.gray('  Guided setup for token, keys, model, and OpenClaw profile.\n'));
+
+  await setup({ token: opts.token || '', skipOpenClawCheck: true });
+
+  const token = config.get('runner_key') || config.get('install_token');
+  if (!isValidWorkspaceToken(token)) {
+    throw new Error('A valid workspace token is required. Use --token=workspace_live_... or --token=rk_...');
+  }
+
+  const selectedModel = (opts.model || config.get('MODEL_PRIMARY') || DEFAULT_PRIMARY_MODEL).trim();
+  config.set('MODEL_PRIMARY', selectedModel);
+  console.log(chalk.green(`  ✓ Default model set: ${selectedModel}`));
+
+  const installSpinner = ora('Checking OpenClaw installation...').start();
+  const status = await ocManager.check();
+  if (!status.installed) {
+    installSpinner.text = 'Installing OpenClaw...';
+    await ocManager.install();
+    installSpinner.succeed('OpenClaw installed');
+  } else {
+    installSpinner.succeed(`OpenClaw ${status.version} found`);
+  }
+
+  if (opts.openclawOnboard !== false) {
+    console.log(chalk.white.bold('\n  OpenClaw native onboarding'));
+    console.log(chalk.gray('  Launching `openclaw --profile bolta onboard` for provider/auth tuning.\n'));
+    await ocManager.runOnboard();
+  }
+
+  const configureSpinner = ora('Applying Bolta workspace configuration...').start();
+  await ocManager.configure({
+    port: parseInt(opts.port || '18789', 10),
+    anthropicKey: config.get('ANTHROPIC_API_KEY'),
+    modelPrimary: selectedModel,
+  });
+  configureSpinner.succeed('Bolta workspace configured');
+
+  console.log(chalk.green.bold('\n  ✅ Onboarding complete'));
+  console.log(chalk.cyan('  $ boltaclaw start --verbose\n'));
 }
