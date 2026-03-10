@@ -38,22 +38,38 @@ export class Bridge {
       verbose: this.verbose,
     });
 
-    // Register message handlers
-    this.ws.on('handshake_complete', (data) => this._onHandshake(data));
+    // Wait for handshake before resolving connect() — ensures runner_key is saved
+    const handshakePromise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Handshake timeout (30s)')), 30000);
+      this.ws.on('handshake_complete', (data) => {
+        clearTimeout(timeout);
+        this._onHandshake(data);
+        resolve(data);
+      });
+      this.ws.on('error', (data) => {
+        clearTimeout(timeout);
+        reject(new Error(data.message || 'Auth failed'));
+      });
+    });
+
+    // Register other message handlers
     this.ws.on('job_dispatch', (data) => this._onJobDispatch(data));
     this.ws.on('job_cancel', (data) => this._onJobCancel(data));
     this.ws.on('config_sync', (data) => this._onConfigSync(data));
     this.ws.on('ping', () => this.ws.send('pong', {}));
-    this.ws.on('error', (data) => {
-      console.error(`  ❌ Server error: ${data.message || 'Unknown'}`);
-    });
 
     // Reconnect handler — use persistent runner_key (install token is burned after first handshake)
     this.ws.on('reconnected', () => {
       const runnerKey = this.config.get('runner_key');
-      const token = runnerKey || this.config.get('install_token');
-      console.log(`  🔄 Reconnecting with ${runnerKey ? 'runner_key' : 'install_token'}: ${token?.slice(0, 15)}...`);
-      if (token) this.ws.send('auth', { token });
+      if (runnerKey) {
+        console.log(`  🔄 Reconnecting with runner_key: ${runnerKey.slice(0, 12)}...`);
+        this.ws.send('auth', { token: runnerKey });
+      } else {
+        // Install token is burned after first use — cannot reconnect without runner_key
+        console.error('  ❌ No runner_key saved. The install token was already used.');
+        console.error('  ❌ Generate a new token from Bolta dashboard → Settings → Self-Hosted');
+        console.error('  ❌ Then run: boltaclaw start --token=workspace_live_...');
+      }
     });
 
     await this.ws.connect();
@@ -65,6 +81,9 @@ export class Bridge {
     console.log('  🔑 Sending auth...');
     this.ws.send('auth', { token });
     console.log('  🔑 Auth sent, waiting for handshake...');
+
+    // Wait for handshake to complete — ensures runner_key is persisted before proceeding
+    await handshakePromise;
 
     this._startHeartbeat();
   }

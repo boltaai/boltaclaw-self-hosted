@@ -7,6 +7,7 @@ import { setup, onboard } from './setup.js';
 import { Bridge } from './bridge.js';
 import { Config } from './config.js';
 import { OpenClawManager } from './openclaw.js';
+import { TelegramWebhook } from './telegram.js';
 
 const program = new Command();
 const DEFAULT_PRIMARY_MODEL = 'anthropic/claude-sonnet-4-6';
@@ -27,6 +28,8 @@ program
   .option('--verbose', 'Enable verbose logging')
   .option('--no-gateway', 'Skip starting OpenClaw gateway (bridge-only mode)')
   .option('--port <port>', 'OpenClaw gateway port', '18789')
+  .option('--telegram-port <port>', 'Telegram webhook listener port', '8080')
+  .option('--telegram-url <url>', 'Public URL for Telegram webhook registration')
   .action(async (opts) => {
     console.log(chalk.blue.bold('\n  ⚡ Bolta OpenClaw Engine v0.1.0\n'));
 
@@ -118,11 +121,41 @@ program
     console.log(chalk.green.bold('\n  🟢 Engine is online'));
     console.log(chalk.gray('  Waiting for jobs from Bolta dashboard...\n'));
     console.log(chalk.gray(`  OpenClaw gateway: ws://127.0.0.1:${opts.port}`));
+
+    // Step 5: Start Telegram webhook if configured
+    let telegramWebhook = null;
+    if (config.get('TELEGRAM_BOT_TOKEN')) {
+      try {
+        telegramWebhook = new TelegramWebhook(config, {
+          port: parseInt(opts.telegramPort, 10),
+          publicUrl: opts.telegramUrl || config.get('TELEGRAM_WEBHOOK_URL') || '',
+          verbose: opts.verbose,
+          onMessage: async ({ chatId, userId, text, username }) => {
+            // Dispatch as a job via bridge
+            console.log(`  📨 Telegram job from @${username}: "${text.slice(0, 60)}..."`);
+            bridge.ws.send('telegram_message', {
+              chat_id: chatId,
+              user_id: userId,
+              text,
+              username,
+            });
+            return '⏳ Got it — your agents are on it.';
+          },
+        });
+        await telegramWebhook.start();
+        console.log(chalk.gray(`  Telegram webhook: http://0.0.0.0:${opts.telegramPort}`));
+      } catch (err) {
+        console.error(chalk.yellow(`  ⚠ Telegram webhook failed to start: ${err.message}`));
+        console.error(chalk.gray('    Agents will still work — Telegram just won\'t be available.'));
+      }
+    }
+
     console.log(chalk.gray('  Press Ctrl+C to stop\n'));
 
     // Graceful shutdown
     const shutdown = async () => {
       console.log(chalk.yellow('\n  Shutting down...'));
+      if (telegramWebhook) await telegramWebhook.stop();
       await bridge.disconnect();
       await ocManager.stopGateway();
       process.exit(0);

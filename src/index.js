@@ -2,6 +2,7 @@ export { Bridge } from './bridge.js';
 export { Config } from './config.js';
 export { Database } from './db.js';
 export { OpenClawManager } from './openclaw.js';
+export { TelegramWebhook } from './telegram.js';
 export { WSClient } from './ws-client.js';
 export { setup } from './setup.js';
 export { AGENT_PRESETS, getAgentIds, getPreset } from './agents.js';
