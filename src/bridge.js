@@ -15,6 +15,8 @@
 import { WSClient } from './ws-client.js';
 import { Database } from './db.js';
 import { resolveProviderConfig } from './llm.js';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 const BOLTA_WS_URL = process.env.BOLTA_WS_URL || 'wss://platty.boltathread.com/ws/runner/';
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -56,6 +58,7 @@ export class Bridge {
     this.ws.on('job_dispatch', (data) => this._onJobDispatch(data));
     this.ws.on('job_cancel', (data) => this._onJobCancel(data));
     this.ws.on('config_sync', (data) => this._onConfigSync(data));
+    this.ws.on('agent_bootstrap_sync', (data) => this._onAgentBootstrapSync(data));
     this.ws.on('ping', () => this.ws.send('pong', {}));
 
     // Reconnect handler — use persistent runner_key (install token is burned after first handshake)
@@ -140,6 +143,9 @@ export class Bridge {
       event: { type: 'status', message: `${agent_slug} is thinking...` },
     });
 
+    // Snapshot memory before run (for diff after completion)
+    const memoryBefore = this.ocManager.getAgentMemorySnapshot(agent_slug);
+
     try {
       // Build system context from workspace + agent context
       const systemContext = this._buildSystemContext(agent_slug, context);
@@ -159,6 +165,9 @@ export class Bridge {
         });
         this.db.updateJob(job_id, 'complete', result.output);
         console.log(`  ✅ Job complete: ${agent_slug} — ${job_id}`);
+
+        // Sync memory changes back to server
+        this._syncAgentSelfUpdates(agent_slug, memoryBefore);
       } else {
         throw new Error(result.error || 'Agent execution failed');
       }
@@ -218,6 +227,35 @@ export class Bridge {
     }
   }
 
+  _onAgentBootstrapSync(data) {
+    if (data.slug && data.bootstrap) {
+      this.ocManager.applyAgentBootstrap(data.slug, data.bootstrap);
+      console.log(`  🔄 Bootstrap synced for agent: ${data.slug}`);
+    }
+  }
+
+  async _syncAgentSelfUpdates(agentSlug, memoryBefore) {
+    try {
+      const memoryUpdates = this.ocManager.diffAgentMemory(agentSlug, memoryBefore);
+      if (memoryUpdates.length === 0) return;
+
+      const apiKey = this.config.get('BOLTA_API_KEY');
+      const workspaceId = this.config.get('workspace_id');
+      if (!apiKey || !workspaceId) return;
+
+      // We need the agent ID, but we only have the slug
+      // Send via WebSocket instead — let server resolve slug → id
+      this.ws.send('agent_self_update', {
+        agent_slug: agentSlug,
+        memory_updates: memoryUpdates,
+      });
+
+      console.log(`  🧠 Synced ${memoryUpdates.length} memory update(s) for ${agentSlug}`);
+    } catch (err) {
+      console.error(`  ⚠ Memory sync failed for ${agentSlug}: ${err.message}`);
+    }
+  }
+
   // --- Helpers ---
 
   _buildSystemContext(agentSlug, context = {}) {
@@ -235,9 +273,21 @@ export class Bridge {
       storyteller: 'Narrative & Brand Storytelling',
     };
 
-    const role = agentRoles[agentSlug] || 'General Social Media Agent';
-    parts.push(`You are the "${agentSlug}" agent, specializing in ${role}.`);
-    parts.push('Execute the task below and return actionable results.');
+    // Try to read server-generated SOUL.md first, fallback to role map
+    let soulContent = null;
+    try {
+      const soulPath = join(this.ocManager.workspaceDir, 'agents', agentSlug, 'SOUL.md');
+      soulContent = readFileSync(soulPath, 'utf-8');
+    } catch { /* file doesn't exist yet */ }
+
+    if (soulContent) {
+      parts.push(soulContent);
+      parts.push('\nExecute the task below and return actionable results.');
+    } else {
+      const role = agentRoles[agentSlug] || 'General Social Media Agent';
+      parts.push(`You are the "${agentSlug}" agent, specializing in ${role}.`);
+      parts.push('Execute the task below and return actionable results.');
+    }
 
     if (context.workspace_context) {
       parts.push(`\n## Workspace Context\n${

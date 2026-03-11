@@ -1017,6 +1017,80 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
     }
   }
 
+  /**
+   * Apply bootstrap files for a single agent from Bolta Cloud.
+   * Writes SOUL.md, IDENTITY.md, HEARTBEAT.md, TOOLS.md, MEMORY.md to agent directory.
+   */
+  applyAgentBootstrap(slug, bootstrap) {
+    if (!slug || !bootstrap) return;
+
+    const agentDir = join(this.workspaceDir, 'agents', slug);
+    mkdirSync(agentDir, { recursive: true });
+
+    const files = {
+      'SOUL.md': bootstrap.soul_md,
+      'IDENTITY.md': bootstrap.identity_md,
+      'HEARTBEAT.md': bootstrap.heartbeat_md,
+      'TOOLS.md': bootstrap.tools_md,
+      'MEMORY.md': bootstrap.memory_md,
+    };
+
+    for (const [filename, content] of Object.entries(files)) {
+      if (content) {
+        writeFileSync(join(agentDir, filename), content);
+      }
+    }
+
+    if (this.verbose) {
+      console.log(chalk.gray(`  Bootstrap applied for agent: ${slug}`));
+    }
+  }
+
+  /**
+   * Get current MEMORY.md contents for an agent (for diff after runs).
+   */
+  getAgentMemorySnapshot(slug) {
+    const memPath = join(this.workspaceDir, 'agents', slug, 'MEMORY.md');
+    try {
+      return readFileSync(memPath, 'utf-8');
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Diff agent memory before/after a run. Returns list of new/changed entries.
+   */
+  diffAgentMemory(slug, beforeContent) {
+    const afterContent = this.getAgentMemorySnapshot(slug);
+    if (afterContent === beforeContent) return [];
+
+    // Parse ## Key\n\nValue blocks
+    const parseMemory = (content) => {
+      const entries = {};
+      const blocks = content.split(/^## /m).filter(Boolean);
+      for (const block of blocks) {
+        const newlineIdx = block.indexOf('\n');
+        if (newlineIdx === -1) continue;
+        const key = block.slice(0, newlineIdx).trim();
+        const value = block.slice(newlineIdx + 1).trim();
+        if (key && key !== 'Memory') entries[key] = value;
+      }
+      return entries;
+    };
+
+    const before = parseMemory(beforeContent);
+    const after = parseMemory(afterContent);
+
+    const updates = [];
+    for (const [key, value] of Object.entries(after)) {
+      if (before[key] !== value) {
+        updates.push({ key, value });
+      }
+    }
+    return updates;
+  }
+
   // ─── Config Sync (from Bolta Cloud) ─────────────────────────────
 
   /**
@@ -1036,6 +1110,23 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
     // Update agent presets
     if (cloudConfig.agents) {
       this.config.set('cloud_agents', JSON.stringify(cloudConfig.agents));
+    }
+
+    // Apply OpenClaw bootstrap files (per-agent personality, memory, etc.)
+    if (cloudConfig.bootstrap) {
+      // Workspace-level files
+      if (cloudConfig.bootstrap.user_md) {
+        writeFileSync(join(this.workspaceDir, 'USER.md'), cloudConfig.bootstrap.user_md);
+      }
+      if (cloudConfig.bootstrap.agents_md) {
+        writeFileSync(join(this.workspaceDir, 'AGENTS.md'), cloudConfig.bootstrap.agents_md);
+      }
+      // Per-agent bootstrap
+      if (cloudConfig.bootstrap.per_agent) {
+        for (const [slug, bootstrap] of Object.entries(cloudConfig.bootstrap.per_agent)) {
+          this.applyAgentBootstrap(slug, bootstrap);
+        }
+      }
     }
 
     // Update user context → rewrite USER.md

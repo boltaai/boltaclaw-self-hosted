@@ -1,3 +1,6 @@
+import { existsSync } from 'fs';
+import { join } from 'path';
+
 /**
  * Bolta Agent Presets — Pre-configured social media agents
  *
@@ -463,6 +466,12 @@ export function getAgentIds() {
 /** Get a preset by slug. */
 export function getPreset(slug) {
   return AGENT_PRESETS[slug] || null;
+}
+
+/** Check if a server-generated SOUL.md exists on disk for this agent slug. */
+export function isPresetOverridden(slug, workspaceDir) {
+  if (!workspaceDir) return false;
+  return existsSync(join(workspaceDir, 'agents', slug, 'SOUL.md'));
 }
 
 /**
