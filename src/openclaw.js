@@ -215,7 +215,7 @@ export class OpenClawManager {
     this._configureMCP();
 
     // 7. Configure channels (Telegram, Slack)
-    this._configureChannels();
+    this.configureChannels();
 
     // 8. Configure cron schedules for all agents
     this._configureCronJobs();
@@ -512,59 +512,50 @@ export class OpenClawManager {
     }
   }
 
-  _configureChannels() {
-    // Read current config
-    let config;
-    try {
-      config = JSON.parse(readFileSync(this.configPath, 'utf-8'));
-    } catch { return; }
+  configureChannels() {
+    // Use OpenClaw's `config set` to persist channel config — survives gateway restarts.
+    // Manually editing openclaw.json gets overwritten by the gateway on startup.
 
-    let changed = false;
-
-    // Telegram — fully pre-configured for immediate use
+    // Telegram
     const tgToken = this.config.get('TELEGRAM_BOT_TOKEN');
     if (tgToken) {
-      const allowFrom = [];
-      // Add user's Telegram ID to allowlist
-      const tgUserId = this.config.get('TELEGRAM_USER_ID');
-      if (tgUserId) allowFrom.push(tgUserId);
-
-      config.channels.telegram = {
-        botToken: tgToken,
-        dmPolicy: allowFrom.length > 0 ? 'allowlist' : 'open',
-        groupPolicy: 'allowlist',
-        streaming: true,
-        allowFrom,
-      };
-
-      // Enable telegram plugin
-      if (!config.plugins) config.plugins = { slots: {}, entries: {} };
-      config.plugins.entries.telegram = { enabled: true };
-      changed = true;
-
-      // Write Telegram credentials for OpenClaw's native channel system
-      const tgCreds = join(this.credentialsDir, 'telegram-allowFrom.json');
-      if (allowFrom.length > 0 && !existsSync(tgCreds)) {
-        writeFileSync(tgCreds, JSON.stringify(allowFrom, null, 2));
-      }
-
-      if (this.verbose) {
-        console.log(chalk.green(`  ✓ Telegram configured${allowFrom.length ? ` (allowlist: ${allowFrom.join(', ')})` : ' (open DMs)'}`));
+      try {
+        // Check if already configured to avoid unnecessary writes
+        const current = this._exec('config get channels.telegram.botToken', { throwOnError: false });
+        if (!current || current.includes('undefined') || !current.includes('REDACTED')) {
+          this._exec(`config set channels.telegram.botToken "${tgToken}"`);
+          this._exec('config set channels.telegram.allowFrom \'["*"]\'');
+          this._exec('config set channels.telegram.dmPolicy "open"');
+          this._exec('config set channels.telegram.groupPolicy "allowlist"');
+          this._exec('config set channels.telegram.streaming "partial"');
+        }
+        if (this.verbose) {
+          console.log(chalk.green('  ✓ Telegram channel configured'));
+        }
+      } catch (err) {
+        if (this.verbose) {
+          console.log(chalk.yellow(`  ⚠ Telegram channel config failed: ${err.message}`));
+        }
       }
     }
 
     // Slack
     const slackToken = this.config.get('SLACK_BOT_TOKEN');
     if (slackToken) {
-      config.channels.slack = {
-        botToken: slackToken,
-        appToken: this.config.get('SLACK_APP_TOKEN') || '',
-      };
-      changed = true;
-    }
-
-    if (changed) {
-      writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+      try {
+        this._exec(`config set channels.slack.botToken "${slackToken}"`);
+        const appToken = this.config.get('SLACK_APP_TOKEN');
+        if (appToken) {
+          this._exec(`config set channels.slack.appToken "${appToken}"`);
+        }
+        if (this.verbose) {
+          console.log(chalk.green('  ✓ Slack channel configured'));
+        }
+      } catch (err) {
+        if (this.verbose) {
+          console.log(chalk.yellow(`  ⚠ Slack channel config failed: ${err.message}`));
+        }
+      }
     }
   }
 

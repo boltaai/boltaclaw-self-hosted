@@ -104,6 +104,8 @@ program
     if (opts.gateway !== false) {
       const gwSpinner = ora('Starting OpenClaw gateway...').start();
       await ocManager.startGateway();
+      // Re-apply channel config after gateway starts (gateway overwrites openclaw.json on startup)
+      ocManager.configureChannels();
       gwSpinner.succeed('OpenClaw gateway running');
     }
 

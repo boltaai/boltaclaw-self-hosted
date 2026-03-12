@@ -247,6 +247,8 @@ export class Bridge {
       this.ocManager.applyCloudConfig(data.config);
       // Re-configure MCP with new credentials
       this.ocManager._configureMCP();
+      // Re-apply channel config (Telegram, Slack) with any new tokens from cloud
+      this.ocManager.configureChannels();
       console.log('  🔄 Config synced from Bolta Cloud → OpenClaw workspace + MCP updated');
     }
   }
