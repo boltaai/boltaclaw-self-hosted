@@ -3,11 +3,13 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
+import { createInterface } from 'readline';
 import { setup, onboard } from './setup.js';
 import { Bridge } from './bridge.js';
 import { Config } from './config.js';
 import { OpenClawManager } from './openclaw.js';
 import { TelegramWebhook } from './telegram.js';
+import { BoltaAPIClient } from './api-client.js';
 
 const program = new Command();
 const DEFAULT_PRIMARY_MODEL = 'anthropic/claude-sonnet-4-6';
@@ -262,5 +264,320 @@ program
     const ocManager = new OpenClawManager(config);
     await ocManager.update();
   });
+
+// ─── API-based CLI commands ──────────────────────────────────────────────────
+
+program
+  .command('run')
+  .description('Run an agent with a prompt (API-based, server-side execution)')
+  .argument('<prompt...>', 'The prompt to send to the agent')
+  .option('--agent <agent>', 'Agent slug (e.g. hype-man, hunter, deep-diver, loop-operator)')
+  .option('--local', 'Run locally via OpenClaw instead of API (BYOK)')
+  .option('--json', 'Output raw JSON events instead of formatted text')
+  .action(async (promptParts, opts) => {
+    const prompt = promptParts.join(' ');
+    const config = new Config();
+
+    // Local mode: use OpenClaw directly
+    if (opts.local) {
+      const ocManager = new OpenClawManager(config);
+      const spinner = ora('Running locally...').start();
+      const result = await ocManager.executeAgentTurn(prompt, {
+        agentSlug: opts.agent || 'hype-man',
+      });
+      spinner.stop();
+      if (result.success) {
+        console.log(result.output);
+      } else {
+        console.error(chalk.red(`Error: ${result.error}`));
+        process.exit(1);
+      }
+      return;
+    }
+
+    // API mode: stream from server
+    const client = new BoltaAPIClient(config);
+    const validation = client.validate();
+    if (!validation.ok) {
+      console.error(chalk.red(`  ✗ ${validation.error}`));
+      process.exit(1);
+    }
+
+    const spinner = ora({ text: 'Thinking...', color: 'cyan' }).start();
+    let spinnerStopped = false;
+
+    try {
+      await client.streamRun(prompt, { agent: opts.agent }, (event) => {
+        if (opts.json) {
+          console.log(JSON.stringify(event));
+          return;
+        }
+
+        switch (event.event) {
+          case 'event': {
+            const d = event.data;
+            if (d.type === 'routing') {
+              const agents = d.agents?.join(', ') || '';
+              spinner.text = agents ? `Routing to ${agents}...` : d.message;
+            } else if (d.type === 'delegation') {
+              spinner.text = d.message;
+            } else if (d.type === 'thought') {
+              spinner.text = `${d.agent_display || ''}: ${d.message}`;
+            }
+            break;
+          }
+          case 'response': {
+            if (!spinnerStopped) {
+              spinner.stop();
+              spinnerStopped = true;
+            }
+            console.log();
+            console.log(event.data.message);
+            console.log();
+            if (event.data.agents_involved?.length) {
+              console.log(chalk.gray(`  Agents: ${event.data.agents_involved.join(', ')}`));
+            }
+            break;
+          }
+          case 'error': {
+            if (!spinnerStopped) {
+              spinner.fail(event.data.error || 'Unknown error');
+              spinnerStopped = true;
+            }
+            break;
+          }
+          case 'done': {
+            if (!spinnerStopped) {
+              spinner.stop();
+              spinnerStopped = true;
+            }
+            break;
+          }
+        }
+      });
+    } catch (err) {
+      spinner.fail(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+
+program
+  .command('chat')
+  .description('Interactive chat with your agents (API-based)')
+  .option('--agent <agent>', 'Default agent slug')
+  .option('--local', 'Run locally via OpenClaw instead of API (BYOK)')
+  .action(async (opts) => {
+    const config = new Config();
+
+    if (opts.local) {
+      console.log(chalk.blue.bold('\n  ⚡ BoltaClaw Chat (local mode)\n'));
+      console.log(chalk.gray('  Using local OpenClaw runtime. Type /quit to exit.\n'));
+
+      const ocManager = new OpenClawManager(config);
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+      const askQuestion = () => {
+        rl.question(chalk.cyan('  you → '), async (input) => {
+          const trimmed = input.trim();
+          if (!trimmed || trimmed === '/quit' || trimmed === '/exit') {
+            console.log(chalk.gray('\n  Goodbye.\n'));
+            rl.close();
+            return;
+          }
+
+          const spinner = ora({ text: 'Thinking...', color: 'cyan' }).start();
+          const result = await ocManager.executeAgentTurn(trimmed, {
+            agentSlug: opts.agent || 'hype-man',
+          });
+          spinner.stop();
+
+          if (result.success) {
+            console.log(chalk.white(`\n  ${result.output}\n`));
+          } else {
+            console.log(chalk.red(`\n  Error: ${result.error}\n`));
+          }
+
+          askQuestion();
+        });
+      };
+
+      askQuestion();
+      return;
+    }
+
+    // API mode
+    const client = new BoltaAPIClient(config);
+    const validation = client.validate();
+    if (!validation.ok) {
+      console.error(chalk.red(`  ✗ ${validation.error}`));
+      process.exit(1);
+    }
+
+    console.log(chalk.blue.bold('\n  ⚡ BoltaClaw Chat\n'));
+    console.log(chalk.gray('  Connected to Bolta API. Type /quit to exit, /status for workspace info.\n'));
+
+    const history = [];
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+    const askQuestion = () => {
+      rl.question(chalk.cyan('  you → '), async (input) => {
+        const trimmed = input.trim();
+        if (!trimmed) {
+          askQuestion();
+          return;
+        }
+
+        // REPL commands
+        if (trimmed === '/quit' || trimmed === '/exit') {
+          console.log(chalk.gray('\n  Goodbye.\n'));
+          rl.close();
+          return;
+        }
+
+        if (trimmed === '/status') {
+          try {
+            const status = await client.getStatus();
+            console.log();
+            console.log(chalk.bold('  Agents:'));
+            for (const a of status.agents || []) {
+              const icon = a.status === 'active' ? chalk.green('●') : chalk.gray('○');
+              console.log(`    ${icon} ${a.name} (${a.type})`);
+            }
+            console.log(chalk.bold('\n  Accounts:'));
+            for (const a of status.accounts || []) {
+              console.log(`    ${a.platform}: @${a.username}`);
+            }
+            console.log();
+          } catch (err) {
+            console.log(chalk.red(`\n  Error: ${err.message}\n`));
+          }
+          askQuestion();
+          return;
+        }
+
+        if (trimmed === '/clear') {
+          history.length = 0;
+          console.log(chalk.gray('\n  History cleared.\n'));
+          askQuestion();
+          return;
+        }
+
+        if (trimmed === '/help') {
+          console.log();
+          console.log(chalk.bold('  Commands:'));
+          console.log('    /status   — Show workspace agents and accounts');
+          console.log('    /clear    — Clear conversation history');
+          console.log('    /quit     — Exit chat');
+          console.log('    /help     — Show this help');
+          console.log();
+          askQuestion();
+          return;
+        }
+
+        // Send message via API
+        const spinner = ora({ text: 'Thinking...', color: 'cyan' }).start();
+        let responseText = '';
+
+        try {
+          await client.streamRun(trimmed, { history }, (event) => {
+            if (event.event === 'event') {
+              const d = event.data;
+              if (d.type === 'routing' && d.agents?.length) {
+                spinner.text = `Routing to ${d.agents.join(', ')}...`;
+              } else if (d.message) {
+                spinner.text = d.message;
+              }
+            } else if (event.event === 'response') {
+              spinner.stop();
+              responseText = event.data.message;
+              console.log(chalk.white(`\n  ${responseText}\n`));
+            } else if (event.event === 'error') {
+              spinner.fail(event.data.error || 'Unknown error');
+            } else if (event.event === 'done') {
+              spinner.stop();
+            }
+          });
+        } catch (err) {
+          spinner.fail(`Error: ${err.message}`);
+        }
+
+        // Maintain conversation history
+        history.push({ role: 'user', content: trimmed });
+        if (responseText) {
+          history.push({ role: 'assistant', content: responseText });
+        }
+        // Keep history bounded
+        if (history.length > 20) {
+          history.splice(0, history.length - 20);
+        }
+
+        askQuestion();
+      });
+    };
+
+    askQuestion();
+  });
+
+
+program
+  .command('whoami')
+  .description('Show workspace status and connected agents')
+  .action(async () => {
+    const config = new Config();
+    const client = new BoltaAPIClient(config);
+    const validation = client.validate();
+    if (!validation.ok) {
+      console.error(chalk.red(`  ✗ ${validation.error}`));
+      process.exit(1);
+    }
+
+    const spinner = ora('Fetching workspace info...').start();
+    try {
+      const status = await client.getStatus();
+      spinner.stop();
+
+      console.log(chalk.blue.bold('\n  Workspace Status\n'));
+      console.log(`  Workspace:  ${status.workspace_id}`);
+
+      console.log(chalk.bold('\n  Agents:'));
+      if (status.agents?.length) {
+        for (const a of status.agents) {
+          const icon = a.status === 'active' ? chalk.green('●') : chalk.gray('○');
+          console.log(`    ${icon} ${a.name} (${a.slug || a.type}) — ${a.status}`);
+        }
+      } else {
+        console.log(chalk.gray('    No agents configured'));
+      }
+
+      console.log(chalk.bold('\n  Connected Accounts:'));
+      if (status.accounts?.length) {
+        for (const a of status.accounts) {
+          console.log(`    ${a.platform}: @${a.username}`);
+        }
+      } else {
+        console.log(chalk.gray('    No accounts connected'));
+      }
+
+      console.log(chalk.bold('\n  Recent Runs:'));
+      if (status.recent_runs?.length) {
+        for (const r of status.recent_runs.slice(0, 5)) {
+          const icon = r.status === 'completed' ? chalk.green('✓')
+            : r.status === 'failed' ? chalk.red('✗')
+            : chalk.yellow('…');
+          const time = r.started_at ? new Date(r.started_at).toLocaleString() : 'unknown';
+          console.log(`    ${icon} ${r.agent} (${r.trigger}) — ${time}`);
+        }
+      } else {
+        console.log(chalk.gray('    No recent runs'));
+      }
+
+      console.log();
+    } catch (err) {
+      spinner.fail(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
 
 program.parse();

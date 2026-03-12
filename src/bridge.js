@@ -59,6 +59,7 @@ export class Bridge {
     this.ws.on('job_cancel', (data) => this._onJobCancel(data));
     this.ws.on('config_sync', (data) => this._onConfigSync(data));
     this.ws.on('agent_bootstrap_sync', (data) => this._onAgentBootstrapSync(data));
+    this.ws.on('register_workspace_result', (data) => this._onRegisterWorkspaceResult(data));
     this.ws.on('ping', () => this.ws.send('pong', {}));
 
     // Reconnect handler — use persistent runner_key (install token is burned after first handshake)
@@ -117,6 +118,14 @@ export class Bridge {
     if (data.workspace_id) {
       this.config.set('workspace_id', data.workspace_id);
     }
+    // Multi-tenant: store all workspace IDs
+    if (data.workspaces && Array.isArray(data.workspaces)) {
+      this.workspaceIds = data.workspaces.map(w => w.id);
+      this.config.set('workspace_ids', JSON.stringify(this.workspaceIds));
+      console.log(`  🏢 Serving ${this.workspaceIds.length} workspace(s): ${this.workspaceIds.map(id => id.slice(0, 8)).join(', ')}`);
+    } else {
+      this.workspaceIds = [data.workspace_id];
+    }
     // Store Bolta API key for MCP
     if (data.api_key) {
       this.config.set('BOLTA_API_KEY', data.api_key);
@@ -125,16 +134,23 @@ export class Bridge {
     if (data.config) {
       this.ocManager.applyCloudConfig(data.config);
     }
+    // Multi-tenant: apply configs for all workspaces
+    if (data.workspace_configs) {
+      for (const [wsId, wsConfig] of Object.entries(data.workspace_configs)) {
+        this.ocManager.applyCloudConfig(wsConfig, wsId);
+      }
+    }
     console.log(`  ✅ Handshake complete — workspace: ${data.workspace_id}`);
   }
 
   async _onJobDispatch(data) {
-    const { job_id, run_id, agent_slug, input, context } = data;
+    const { job_id, run_id, agent_slug, input, context, workspace_id } = data;
+    const targetWorkspace = workspace_id || this.config.get('workspace_id');
 
-    console.log(`  📥 Job received: ${agent_slug} — ${job_id}`);
+    console.log(`  📥 Job received: ${agent_slug} — ${job_id} (workspace: ${targetWorkspace.slice(0, 8)}...)`);
 
     // Store job locally
-    this.db.createJob(job_id, this.config.get('workspace_id'), agent_slug, input);
+    this.db.createJob(job_id, targetWorkspace, agent_slug, input);
     this.activeJobs.set(job_id, { status: 'running', started: Date.now(), agent_slug });
 
     // Report progress: starting
@@ -193,6 +209,14 @@ export class Bridge {
 
   _onConfigSync(data) {
     if (data.config) {
+      // Multi-tenant: handle workspace registration from server
+      if (data.config.register_workspace) {
+        const { workspace_id, token } = data.config.register_workspace;
+        console.log(`  🏢 Registering new workspace: ${workspace_id.slice(0, 8)}...`);
+        this.ws.send('register_workspace', { token });
+        return;
+      }
+
       // Store Bolta API key if provided (for MCP auth)
       if (data.config.api_key) {
         this.config.set('BOLTA_API_KEY', data.config.api_key);
@@ -224,6 +248,24 @@ export class Bridge {
       // Re-configure MCP with new credentials
       this.ocManager._configureMCP();
       console.log('  🔄 Config synced from Bolta Cloud → OpenClaw workspace + MCP updated');
+    }
+  }
+
+  _onRegisterWorkspaceResult(data) {
+    if (data.success) {
+      // Add to local workspace list
+      if (!this.workspaceIds) this.workspaceIds = [];
+      if (!this.workspaceIds.includes(data.workspace_id)) {
+        this.workspaceIds.push(data.workspace_id);
+        this.config.set('workspace_ids', JSON.stringify(this.workspaceIds));
+      }
+      // Apply workspace config if provided
+      if (data.config) {
+        this.ocManager.applyCloudConfig(data.config, data.workspace_id);
+      }
+      console.log(`  ✅ Workspace registered: ${data.workspace_id.slice(0, 8)}... (${data.role}) — total: ${this.workspaceIds.length}`);
+    } else {
+      console.error(`  ❌ Workspace registration failed: ${data.error}`);
     }
   }
 
