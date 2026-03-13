@@ -3,7 +3,8 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { createInterface } from 'readline';
+import { createInterface, emitKeypressEvents } from 'readline';
+import { join } from 'path';
 import process from 'process';
 import { setup, onboard } from './setup.js';
 import { Bridge } from './bridge.js';
@@ -11,12 +12,59 @@ import { Config } from './config.js';
 import { OpenClawManager } from './openclaw.js';
 import { TelegramWebhook } from './telegram.js';
 import { BoltaAPIClient } from './api-client.js';
+import { printBanner, printSection, printKeyValue } from './tui.js';
 
 const program = new Command();
 const DEFAULT_PRIMARY_MODEL = 'anthropic/claude-sonnet-4-6';
 
 function isValidWorkspaceToken(token) {
   return typeof token === 'string' && (token.startsWith('workspace_live_') || token.startsWith('rk_'));
+}
+
+async function collectRuntimeDiagnostics(config, ocManager) {
+  const findings = [];
+  const runnerKey = config.get('runner_key');
+  const installToken = config.get('install_token');
+  const hasLlmKey = Boolean(config.get('ANTHROPIC_API_KEY') || config.get('OPENAI_API_KEY'));
+  const gwPort = config.get('gateway_port') || '18789';
+
+  const add = (ok, label, detail = '') => findings.push({ ok, label, detail });
+
+  const major = Number.parseInt(process.versions.node.split('.')[0], 10);
+  add(
+    Number.isFinite(major) && major >= 18,
+    `Node.js ${process.versions.node}`,
+    Number.isFinite(major) && major >= 18 ? 'meets >=18 requirement' : 'requires Node.js 18+'
+  );
+  add(
+    Boolean(runnerKey || installToken),
+    'Workspace auth token',
+    runnerKey ? 'runner key configured' : installToken ? 'install token configured' : 'not configured'
+  );
+  add(hasLlmKey, 'LLM API key', hasLlmKey ? 'configured' : 'needs ANTHROPIC_API_KEY or OPENAI_API_KEY');
+
+  const ocStatus = await ocManager.check();
+  add(
+    ocStatus.installed,
+    'OpenClaw installation',
+    ocStatus.installed ? `v${ocStatus.version} (${ocStatus.bin})` : 'not installed'
+  );
+
+  const gwStatus = await ocManager.gatewayStatus();
+  add(gwStatus.running, 'Gateway listener', `${gwStatus.running ? 'running' : 'stopped'} on 127.0.0.1:${gwPort}`);
+
+  if (ocStatus.installed) {
+    try {
+      const code = await ocManager.runOpenClaw(['gateway', 'health'], { stdio: 'ignore' });
+      add(code === 0, 'OpenClaw gateway health command', code === 0 ? 'command succeeds' : `exit code ${code}`);
+    } catch (err) {
+      add(false, 'OpenClaw gateway health command', err.message);
+    }
+  } else {
+    add(false, 'OpenClaw gateway health command', 'skipped (OpenClaw not installed)');
+  }
+
+  return { findings, ocStatus, gwStatus };
 }
 
 program
@@ -34,7 +82,7 @@ program
   .option('--telegram-port <port>', 'Telegram webhook listener port', '8080')
   .option('--telegram-url <url>', 'Public URL for Telegram webhook registration')
   .action(async (opts) => {
-    console.log(chalk.blue.bold('\n  ⚡ Bolta OpenClaw Engine v0.1.0\n'));
+    printBanner('Bolta OpenClaw Engine v0.1.0');
 
     const config = new Config();
 
@@ -197,44 +245,92 @@ program
 program
   .command('status')
   .description('Check engine status')
-  .action(async () => {
+  .option('--json', 'Output machine-readable JSON')
+  .action(async (opts) => {
     const config = new Config();
     const ocManager = new OpenClawManager(config);
 
-    console.log(chalk.blue.bold('\n  Bolta OpenClaw Engine Status\n'));
-
-    // OpenClaw status
     const ocStatus = await ocManager.check();
-    console.log(`  OpenClaw:     ${ocStatus.installed ? chalk.green(`v${ocStatus.version}`) : chalk.red('not installed')}`);
-
-    // Gateway status
     const gwStatus = await ocManager.gatewayStatus();
-    console.log(`  Gateway:      ${gwStatus.running ? chalk.green('running') : chalk.gray('stopped')}`);
-
-    // Connection status
     const runnerKey = config.get('runner_key');
+    const installToken = config.get('install_token');
     const workspaceId = config.get('workspace_id');
-    console.log(`  Workspace:    ${workspaceId || chalk.gray('not configured')}`);
-    console.log(`  Runner Key:   ${runnerKey ? chalk.green('configured') : chalk.red('not set')}`);
-    console.log(`  API Key:      ${config.get('ANTHROPIC_API_KEY') ? chalk.green('configured') : chalk.yellow('not set')}`);
-
-    // Skills
+    const anthropicConfigured = Boolean(config.get('ANTHROPIC_API_KEY'));
+    const openaiConfigured = Boolean(config.get('OPENAI_API_KEY'));
     const skillsDir = config.get('skills_dir');
-    console.log(`  Skills:       ${skillsDir || chalk.gray('not installed')}`);
+    const gatewayPort = config.get('gateway_port') || '18789';
 
-    console.log(`  Data Dir:     ${config.dataDir}`);
+    const payload = {
+      workspace: {
+        id: workspaceId,
+        runnerKeyConfigured: Boolean(runnerKey),
+        installTokenConfigured: Boolean(installToken),
+      },
+      llm: {
+        anthropicConfigured,
+        openaiConfigured,
+      },
+      openclaw: {
+        installed: ocStatus.installed,
+        version: ocStatus.version,
+        bin: ocStatus.bin || null,
+        profile: 'bolta',
+      },
+      gateway: {
+        running: gwStatus.running,
+        host: '127.0.0.1',
+        port: gatewayPort,
+      },
+      skills: {
+        configured: Boolean(skillsDir),
+        dir: skillsDir || null,
+      },
+      paths: {
+        boltaclawDataDir: config.dataDir,
+        boltaclawDb: join(config.dataDir, 'boltaclaw.sqlite'),
+        openclawStateDir: ocManager.stateDir,
+        openclawConfigPath: ocManager.configPath,
+        openclawWorkspaceDir: ocManager.workspaceDir,
+      },
+      checkedAt: new Date().toISOString(),
+    };
+
+    if (opts.json) {
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
+
+    const apiKeyLabels = [];
+    if (anthropicConfigured) apiKeyLabels.push('Anthropic');
+    if (openaiConfigured) apiKeyLabels.push('OpenAI');
+
+    printSection('Bolta OpenClaw Engine Status');
+    printKeyValue('OpenClaw', ocStatus.installed ? chalk.green(`v${ocStatus.version}`) : chalk.red('not installed'));
+    printKeyValue('Gateway', gwStatus.running ? chalk.green('running') : chalk.gray('stopped'));
+    printKeyValue('Workspace', workspaceId || chalk.gray('not configured'));
+    printKeyValue('Runner Key', runnerKey ? chalk.green('configured') : chalk.red('not set'));
+    printKeyValue('Install Token', installToken ? chalk.green('configured') : chalk.gray('not set'));
+    printKeyValue('API Keys', apiKeyLabels.length ? apiKeyLabels.join(', ') : chalk.yellow('not set'));
+    printKeyValue('Skills', skillsDir || chalk.gray('not installed'));
+    printKeyValue('Data Dir', config.dataDir);
     console.log();
   });
 
 program
   .command('config')
   .description('Manage local configuration')
-  .argument('<action>', '"set" or "get"')
-  .argument('<key>', 'Configuration key')
+  .argument('<action>', '"set", "get", "unset", or "list"')
+  .argument('[key]', 'Configuration key')
   .argument('[value]', 'Value to set')
   .action((action, key, value) => {
     const config = new Config();
-    if (action === 'set' && value) {
+    const normalized = String(action || '').toLowerCase();
+
+    if (normalized === 'set') {
+      if (!key || value === undefined) {
+        console.log(chalk.red('  Usage: boltaclaw config set KEY VALUE'));
+        process.exit(1);
+      }
       config.set(key, value);
       // Special handling for sensitive keys
       if (key.toLowerCase().includes('key') || key.toLowerCase().includes('token')) {
@@ -242,12 +338,61 @@ program
       } else {
         console.log(chalk.green(`  ✓ ${key} = ${value}`));
       }
-    } else if (action === 'get') {
+      return;
+    }
+
+    if (normalized === 'get') {
+      if (!key) {
+        console.log(chalk.red('  Usage: boltaclaw config get KEY'));
+        process.exit(1);
+      }
       const val = config.get(key);
       console.log(val || chalk.gray('(not set)'));
-    } else {
-      console.log(chalk.red('  Usage: boltaclaw config set KEY VALUE'));
+      return;
     }
+
+    if (normalized === 'unset' || normalized === 'delete' || normalized === 'rm') {
+      if (!key) {
+        console.log(chalk.red('  Usage: boltaclaw config unset KEY'));
+        process.exit(1);
+      }
+      config.delete(key);
+      console.log(chalk.green(`  ✓ ${key} removed`));
+      return;
+    }
+
+    if (normalized === 'list' || normalized === 'ls') {
+      const all = config.getAll();
+      const entries = Object.entries(all).sort(([a], [b]) => a.localeCompare(b));
+      if (!entries.length) {
+        console.log(chalk.gray('(no local config set)'));
+        return;
+      }
+      for (const [k, v] of entries) {
+        console.log(`${k}=${v}`);
+      }
+      return;
+    }
+
+    console.log(chalk.red('  Usage: boltaclaw config <set|get|unset|list> ...'));
+    process.exit(1);
+  });
+
+program
+  .command('paths')
+  .description('Show important local Boltaclaw/OpenClaw filesystem paths')
+  .action(() => {
+    const config = new Config();
+    const ocManager = new OpenClawManager(config);
+
+    printSection('Boltaclaw Paths');
+    printKeyValue('boltaclaw.data_dir', config.dataDir, 22);
+    printKeyValue('boltaclaw.sqlite', join(config.dataDir, 'boltaclaw.sqlite'), 22);
+    printKeyValue('openclaw.state_dir', ocManager.stateDir, 22);
+    printKeyValue('openclaw.config', ocManager.configPath, 22);
+    printKeyValue('openclaw.workspace', ocManager.workspaceDir, 22);
+    printKeyValue('openclaw.skills', ocManager.skillsDir, 22);
+    console.log();
   });
 
 program
@@ -315,6 +460,40 @@ program
   });
 
 program
+  .command('restart')
+  .description('Restart the local OpenClaw gateway and verify health')
+  .action(async () => {
+    const config = new Config();
+    const ocManager = new OpenClawManager(config);
+    const spinner = ora('Restarting OpenClaw gateway...').start();
+
+    try {
+      const status = await ocManager.check();
+      if (!status.installed) {
+        spinner.text = 'Installing OpenClaw...';
+        await ocManager.install();
+      }
+
+      spinner.text = 'Stopping gateway...';
+      await ocManager.stopGateway();
+
+      spinner.text = 'Starting gateway...';
+      await ocManager.startGateway();
+      ocManager.configureChannels();
+
+      const gw = await ocManager.gatewayStatus();
+      if (!gw.running) {
+        throw new Error('Gateway did not come back online');
+      }
+
+      spinner.succeed('Gateway restarted and healthy');
+    } catch (err) {
+      spinner.fail(`Restart failed: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+program
   .command('openclaw')
   .alias('oc')
   .description('Run a raw OpenClaw command using the bolta profile')
@@ -334,56 +513,55 @@ program
 program
   .command('doctor')
   .description('Run runtime diagnostics and report actionable issues')
-  .action(async () => {
+  .option('--fix', 'Attempt safe automatic remediation for common local issues')
+  .action(async (opts) => {
     const config = new Config();
     const ocManager = new OpenClawManager(config);
-    const findings = [];
+    const fixes = [];
 
-    const add = (ok, label, detail = '') => {
-      findings.push({ ok, label, detail });
-    };
-
-    // Node runtime check
-    const major = Number.parseInt(process.versions.node.split('.')[0], 10);
-    if (Number.isFinite(major) && major >= 18) {
-      add(true, `Node.js ${process.versions.node}`, 'meets >=18 requirement');
-    } else {
-      add(false, `Node.js ${process.versions.node}`, 'requires Node.js 18+');
-    }
-
-    // Token and key checks
-    const runnerKey = config.get('runner_key');
-    const installToken = config.get('install_token');
-    add(Boolean(runnerKey || installToken), 'Workspace auth token', runnerKey ? 'runner key configured' : installToken ? 'install token configured' : 'not configured');
-    const hasLlmKey = Boolean(config.get('ANTHROPIC_API_KEY') || config.get('OPENAI_API_KEY'));
-    add(hasLlmKey, 'LLM API key', hasLlmKey ? 'configured' : 'needs ANTHROPIC_API_KEY or OPENAI_API_KEY');
-
-    // OpenClaw install check
-    const ocStatus = await ocManager.check();
-    add(
-      ocStatus.installed,
-      'OpenClaw installation',
-      ocStatus.installed ? `v${ocStatus.version} (${ocStatus.bin})` : 'not installed'
-    );
-
-    // Gateway check
-    const gwStatus = await ocManager.gatewayStatus();
-    const gwPort = config.get('gateway_port') || '18789';
-    add(gwStatus.running, 'Gateway listener', `${gwStatus.running ? 'running' : 'stopped'} on 127.0.0.1:${gwPort}`);
-
-    // Profile-level OpenClaw check (if installed)
-    if (ocStatus.installed) {
+    if (opts.fix) {
+      const fixSpinner = ora('Applying safe fixes...').start();
       try {
-        const code = await ocManager.runOpenClaw(['gateway', 'health'], { stdio: 'ignore' });
-        add(code === 0, 'OpenClaw gateway health command', code === 0 ? 'command succeeds' : `exit code ${code}`);
+        if (!config.get('MODEL_PRIMARY')) {
+          config.set('MODEL_PRIMARY', DEFAULT_PRIMARY_MODEL);
+          fixes.push(`Set MODEL_PRIMARY=${DEFAULT_PRIMARY_MODEL}`);
+        }
+
+        const installed = await ocManager.check();
+        if (!installed.installed) {
+          fixSpinner.text = 'Installing OpenClaw...';
+          await ocManager.install();
+          fixes.push('Installed OpenClaw');
+        }
+
+        const gw = await ocManager.gatewayStatus();
+        if (!gw.running) {
+          fixSpinner.text = 'Starting gateway...';
+          await ocManager.startGateway();
+          ocManager.configureChannels();
+          fixes.push('Started local OpenClaw gateway');
+        }
+
+        fixSpinner.succeed('Safe fixes completed');
       } catch (err) {
-        add(false, 'OpenClaw gateway health command', err.message);
+        fixSpinner.fail(`Auto-fix failed: ${err.message}`);
       }
-    } else {
-      add(false, 'OpenClaw gateway health command', 'skipped (OpenClaw not installed)');
     }
 
-    console.log(chalk.blue.bold('\n  Boltaclaw Doctor\n'));
+    const { findings } = await collectRuntimeDiagnostics(config, ocManager);
+
+    printSection('Boltaclaw Doctor');
+    if (opts.fix) {
+      if (fixes.length) {
+        console.log(chalk.green('  Auto-fixes applied:'));
+        for (const fix of fixes) {
+          console.log(chalk.green(`  + ${fix}`));
+        }
+      } else {
+        console.log(chalk.gray('  No local auto-fixes were needed.'));
+      }
+      console.log();
+    }
     for (const f of findings) {
       const icon = f.ok ? chalk.green('✓') : chalk.red('✗');
       console.log(`  ${icon} ${f.label}${f.detail ? chalk.gray(` — ${f.detail}`) : ''}`);
@@ -393,6 +571,111 @@ program
     if (findings.some((f) => !f.ok)) {
       process.exitCode = 1;
     }
+  });
+
+program
+  .command('tui')
+  .description('Live local operations dashboard (press q to quit)')
+  .option('--interval <seconds>', 'Refresh interval in seconds', '2')
+  .action(async (opts) => {
+    if (!process.stdout.isTTY || !process.stdin.isTTY) {
+      console.error(chalk.red('  ✗ `boltaclaw tui` requires an interactive terminal.'));
+      process.exit(1);
+    }
+
+    const intervalSec = Number.parseInt(String(opts.interval), 10);
+    const intervalMs = Number.isFinite(intervalSec) && intervalSec > 0 ? intervalSec * 1000 : 2000;
+    const config = new Config();
+    const ocManager = new OpenClawManager(config);
+    let stopped = false;
+    let rendering = false;
+    let timer = null;
+
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      if (timer) clearInterval(timer);
+      process.stdin.setRawMode(false);
+      process.stdin.removeListener('keypress', onKeypress);
+      console.log(chalk.gray('\n  Dashboard closed.\n'));
+      process.exit(0);
+    };
+
+    const render = async () => {
+      if (rendering || stopped) return;
+      rendering = true;
+      try {
+        const snapshot = await collectRuntimeDiagnostics(config, ocManager);
+        const workspaceId = config.get('workspace_id') || '(not configured)';
+        const model = config.get('MODEL_PRIMARY') || '(not set)';
+        const last = new Date().toLocaleTimeString();
+        const failing = snapshot.findings.filter((f) => !f.ok).length;
+
+        process.stdout.write('\x1Bc');
+        printBanner('Boltaclaw Ops Dashboard');
+        printKeyValue('Workspace', workspaceId);
+        printKeyValue('Model', model);
+        printKeyValue('OpenClaw', snapshot.ocStatus.installed ? snapshot.ocStatus.version : 'not installed');
+        printKeyValue('Gateway', snapshot.gwStatus.running ? chalk.green('running') : chalk.red('stopped'));
+        printKeyValue('Checks', failing ? chalk.red(`${failing} failing`) : chalk.green('all passing'));
+        printKeyValue('Updated', last);
+        console.log();
+        console.log(chalk.bold('  Diagnostics:'));
+        for (const f of snapshot.findings) {
+          const icon = f.ok ? chalk.green('✓') : chalk.red('✗');
+          console.log(`  ${icon} ${f.label}${f.detail ? chalk.gray(` — ${f.detail}`) : ''}`);
+        }
+        console.log(chalk.gray('\n  Press q to quit, r to refresh now, x to run auto-fix (doctor --fix).'));
+      } catch (err) {
+        process.stdout.write('\x1Bc');
+        printBanner('Boltaclaw Ops Dashboard');
+        console.log(chalk.red(`  Render error: ${err.message}`));
+      } finally {
+        rendering = false;
+      }
+    };
+
+    const onKeypress = async (_str, key) => {
+      if (!key) return;
+      if (key.name === 'q' || (key.ctrl && key.name === 'c')) {
+        stop();
+        return;
+      }
+      if (key.name === 'r') {
+        await render();
+        return;
+      }
+      if (key.name === 'x') {
+        process.stdout.write('\x1Bc');
+        printBanner('Boltaclaw Ops Dashboard');
+        console.log(chalk.yellow('  Running auto-fix...\n'));
+        try {
+          if (!config.get('MODEL_PRIMARY')) {
+            config.set('MODEL_PRIMARY', DEFAULT_PRIMARY_MODEL);
+          }
+          const status = await ocManager.check();
+          if (!status.installed) await ocManager.install();
+          const gw = await ocManager.gatewayStatus();
+          if (!gw.running) {
+            await ocManager.startGateway();
+            ocManager.configureChannels();
+          }
+        } catch (err) {
+          console.log(chalk.red(`  Auto-fix error: ${err.message}`));
+        }
+        await render();
+      }
+    };
+
+    emitKeypressEvents(process.stdin);
+    process.stdin.setRawMode(true);
+    process.stdin.on('keypress', onKeypress);
+
+    timer = setInterval(() => {
+      render().catch(() => {});
+    }, intervalMs);
+
+    await render();
   });
 
 program
@@ -551,7 +834,7 @@ program
     const config = new Config();
 
     if (opts.local) {
-      console.log(chalk.blue.bold('\n  ⚡ BoltaClaw Chat (local mode)\n'));
+      printSection('BoltaClaw Chat (local mode)');
       console.log(chalk.gray('  Using local OpenClaw runtime. Type /quit to exit.\n'));
 
       const ocManager = new OpenClawManager(config);
@@ -594,7 +877,7 @@ program
       process.exit(1);
     }
 
-    console.log(chalk.blue.bold('\n  ⚡ BoltaClaw Chat\n'));
+    printSection('BoltaClaw Chat');
     console.log(chalk.gray('  Connected to Bolta API. Type /quit to exit, /status for workspace info.\n'));
 
     const history = [];
@@ -717,8 +1000,8 @@ program
       const status = await client.getStatus();
       spinner.stop();
 
-      console.log(chalk.blue.bold('\n  Workspace Status\n'));
-      console.log(`  Workspace:  ${status.workspace_id}`);
+      printSection('Workspace Status');
+      printKeyValue('Workspace', status.workspace_id);
 
       console.log(chalk.bold('\n  Agents:'));
       if (status.agents?.length) {

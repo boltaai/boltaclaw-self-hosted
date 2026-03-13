@@ -111,15 +111,21 @@ boltaclaw onboard --token=YOUR_TOKEN
 
 # Check engine status (OpenClaw, gateway, connection, keys)
 boltaclaw status
+boltaclaw status --json
 
 # Configure locally stored settings
 boltaclaw config set ANTHROPIC_API_KEY sk-ant-...   # BYOK — never leaves your machine
 boltaclaw config set MODEL_PRIMARY anthropic/claude-sonnet-4-6
 boltaclaw config set TELEGRAM_BOT_TOKEN 123456:ABC... # Optional chat channel
 boltaclaw config get ANTHROPIC_API_KEY
+boltaclaw config list
+boltaclaw config unset TELEGRAM_BOT_TOKEN
 
 # Tail OpenClaw gateway logs
 boltaclaw logs -f
+
+# Show local runtime paths (db/config/workspace)
+boltaclaw paths
 
 # Gateway lifecycle controls
 boltaclaw gateway health
@@ -135,6 +141,13 @@ boltaclaw action --help
 
 # Diagnose local setup and command failures
 boltaclaw doctor
+boltaclaw doctor --fix
+
+# Restart gateway in one step
+boltaclaw restart
+
+# Live ops dashboard (interactive TUI)
+boltaclaw tui
 
 # Remove local OpenClaw profile (and optionally local Boltaclaw data)
 boltaclaw uninstall --yes
@@ -158,11 +171,13 @@ Use Boltaclaw commands for normal operations. They keep Bolta-specific safety, p
 ```bash
 # 1) Fast diagnostics
 boltaclaw doctor
+boltaclaw doctor --fix
 
 # 2) Gateway not healthy
 boltaclaw gateway start
 boltaclaw gateway health
 boltaclaw logs -f
+boltaclaw restart
 
 # 3) Verify OpenClaw command behavior under Boltaclaw profile
 boltaclaw oc gateway health
