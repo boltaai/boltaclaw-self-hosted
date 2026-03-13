@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import { createInterface } from 'readline';
+import process from 'process';
 import { setup, onboard } from './setup.js';
 import { Bridge } from './bridge.js';
 import { Config } from './config.js';
@@ -256,6 +257,183 @@ program
   .action(async (opts) => {
     const ocManager = new OpenClawManager(new Config());
     await ocManager.tailLogs(opts.follow);
+  });
+
+program
+  .command('gateway')
+  .alias('gw')
+  .description('Manage the local OpenClaw gateway')
+  .argument('<action>', '"start", "stop", or "health"')
+  .action(async (action) => {
+    const config = new Config();
+    const ocManager = new OpenClawManager(config);
+    const normalized = String(action || '').toLowerCase();
+
+    if (normalized === 'start') {
+      const spinner = ora('Starting OpenClaw gateway...').start();
+      try {
+        const status = await ocManager.check();
+        if (!status.installed) {
+          spinner.text = 'Installing OpenClaw...';
+          await ocManager.install();
+        }
+        await ocManager.startGateway();
+        spinner.succeed('Gateway running');
+      } catch (err) {
+        spinner.fail(`Failed to start gateway: ${err.message}`);
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (normalized === 'stop') {
+      const spinner = ora('Stopping OpenClaw gateway...').start();
+      try {
+        await ocManager.stopGateway();
+        spinner.succeed('Gateway stopped');
+      } catch (err) {
+        spinner.fail(`Failed to stop gateway: ${err.message}`);
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (normalized === 'health' || normalized === 'status') {
+      const status = await ocManager.gatewayStatus();
+      if (status.running) {
+        console.log(chalk.green('healthy'));
+      } else {
+        console.log(chalk.red('stopped'));
+        process.exitCode = 1;
+      }
+      return;
+    }
+
+    console.error(chalk.red('Unknown gateway action.'));
+    console.error(chalk.gray('Usage: boltaclaw gateway <start|stop|health>'));
+    process.exit(1);
+  });
+
+program
+  .command('openclaw')
+  .alias('oc')
+  .description('Run a raw OpenClaw command using the bolta profile')
+  .argument('[args...]', 'Arguments passed to OpenClaw')
+  .allowUnknownOption(true)
+  .action(async (args = []) => {
+    const ocManager = new OpenClawManager(new Config());
+    try {
+      const code = await ocManager.runOpenClaw(args, { stdio: 'inherit' });
+      process.exitCode = code;
+    } catch (err) {
+      console.error(chalk.red(`  ✗ ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('doctor')
+  .description('Run runtime diagnostics and report actionable issues')
+  .action(async () => {
+    const config = new Config();
+    const ocManager = new OpenClawManager(config);
+    const findings = [];
+
+    const add = (ok, label, detail = '') => {
+      findings.push({ ok, label, detail });
+    };
+
+    // Node runtime check
+    const major = Number.parseInt(process.versions.node.split('.')[0], 10);
+    if (Number.isFinite(major) && major >= 18) {
+      add(true, `Node.js ${process.versions.node}`, 'meets >=18 requirement');
+    } else {
+      add(false, `Node.js ${process.versions.node}`, 'requires Node.js 18+');
+    }
+
+    // Token and key checks
+    const runnerKey = config.get('runner_key');
+    const installToken = config.get('install_token');
+    add(Boolean(runnerKey || installToken), 'Workspace auth token', runnerKey ? 'runner key configured' : installToken ? 'install token configured' : 'not configured');
+    const hasLlmKey = Boolean(config.get('ANTHROPIC_API_KEY') || config.get('OPENAI_API_KEY'));
+    add(hasLlmKey, 'LLM API key', hasLlmKey ? 'configured' : 'needs ANTHROPIC_API_KEY or OPENAI_API_KEY');
+
+    // OpenClaw install check
+    const ocStatus = await ocManager.check();
+    add(
+      ocStatus.installed,
+      'OpenClaw installation',
+      ocStatus.installed ? `v${ocStatus.version} (${ocStatus.bin})` : 'not installed'
+    );
+
+    // Gateway check
+    const gwStatus = await ocManager.gatewayStatus();
+    const gwPort = config.get('gateway_port') || '18789';
+    add(gwStatus.running, 'Gateway listener', `${gwStatus.running ? 'running' : 'stopped'} on 127.0.0.1:${gwPort}`);
+
+    // Profile-level OpenClaw check (if installed)
+    if (ocStatus.installed) {
+      try {
+        const code = await ocManager.runOpenClaw(['gateway', 'health'], { stdio: 'ignore' });
+        add(code === 0, 'OpenClaw gateway health command', code === 0 ? 'command succeeds' : `exit code ${code}`);
+      } catch (err) {
+        add(false, 'OpenClaw gateway health command', err.message);
+      }
+    } else {
+      add(false, 'OpenClaw gateway health command', 'skipped (OpenClaw not installed)');
+    }
+
+    console.log(chalk.blue.bold('\n  Boltaclaw Doctor\n'));
+    for (const f of findings) {
+      const icon = f.ok ? chalk.green('✓') : chalk.red('✗');
+      console.log(`  ${icon} ${f.label}${f.detail ? chalk.gray(` — ${f.detail}`) : ''}`);
+    }
+    console.log();
+
+    if (findings.some((f) => !f.ok)) {
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('action')
+  .description('Proxy to `openclaw action ...` using the bolta profile')
+  .argument('[args...]', 'Arguments passed to OpenClaw action')
+  .allowUnknownOption(true)
+  .action(async (args = []) => {
+    const ocManager = new OpenClawManager(new Config());
+    try {
+      const code = await ocManager.runOpenClaw(['action', ...args], { stdio: 'inherit' });
+      process.exitCode = code;
+    } catch (err) {
+      console.error(chalk.red(`  ✗ ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('uninstall')
+  .description('Stop gateway and remove local Boltaclaw/OpenClaw state')
+  .option('--purge', 'Also delete Boltaclaw local data (~/.boltaclaw)')
+  .option('--yes', 'Skip confirmation prompt')
+  .action(async (opts) => {
+    if (!opts.yes) {
+      console.error(chalk.yellow('This removes local runtime files.'));
+      console.error(chalk.gray('Re-run with: boltaclaw uninstall --yes [--purge]'));
+      process.exit(1);
+    }
+
+    const spinner = ora('Uninstalling local runtime...').start();
+    try {
+      const ocManager = new OpenClawManager(new Config());
+      await ocManager.uninstall({ removeData: Boolean(opts.purge) });
+      spinner.succeed(opts.purge
+        ? 'Uninstalled OpenClaw profile and Boltaclaw local data'
+        : 'Uninstalled OpenClaw profile');
+    } catch (err) {
+      spinner.fail(`Uninstall failed: ${err.message}`);
+      process.exit(1);
+    }
   });
 
 program

@@ -121,9 +121,65 @@ boltaclaw config get ANTHROPIC_API_KEY
 # Tail OpenClaw gateway logs
 boltaclaw logs -f
 
+# Gateway lifecycle controls
+boltaclaw gateway health
+boltaclaw gateway stop
+boltaclaw gateway start
+boltaclaw gw health   # alias
+
+# Run native OpenClaw commands with bolta profile
+boltaclaw openclaw gateway health
+boltaclaw openclaw uninstall
+boltaclaw oc gateway health   # alias
+boltaclaw action --help
+
+# Diagnose local setup and command failures
+boltaclaw doctor
+
+# Remove local OpenClaw profile (and optionally local Boltaclaw data)
+boltaclaw uninstall --yes
+boltaclaw uninstall --yes --purge
+
 # Update OpenClaw + bolta-skills
 boltaclaw update
 ```
+
+## Boltaclaw-First Command Model
+
+Use Boltaclaw commands for normal operations. They keep Bolta-specific safety, profile isolation, and cloud bridge behavior consistent.
+
+- Prefer `boltaclaw start|status|doctor|gateway|config|run|chat`
+- Use `boltaclaw openclaw ...` (or `boltaclaw oc ...`) for advanced OpenClaw utilities not yet wrapped by Boltaclaw
+- The passthrough always runs with `--profile bolta` so it stays inside Boltaclaw's isolated runtime
+- Avoid running raw `openclaw` without the Bolta profile unless you intentionally want a separate environment
+
+## Troubleshooting Quick Reference
+
+```bash
+# 1) Fast diagnostics
+boltaclaw doctor
+
+# 2) Gateway not healthy
+boltaclaw gateway start
+boltaclaw gateway health
+boltaclaw logs -f
+
+# 3) Verify OpenClaw command behavior under Boltaclaw profile
+boltaclaw oc gateway health
+boltaclaw oc --help
+
+# 4) Re-onboard if token/key/config drifted
+boltaclaw onboard --token=YOUR_TOKEN
+
+# 5) Full cleanup (last resort)
+boltaclaw uninstall --yes --purge
+```
+
+Common causes of command failures:
+- Missing API key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`)
+- Gateway not running on configured local port (`127.0.0.1:18789` by default)
+- Token/config drift after reinstall or machine migration
+- Running native `openclaw` outside the `bolta` profile by accident
 
 ## Security
 

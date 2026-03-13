@@ -28,7 +28,7 @@
  */
 
 import { execSync, spawn, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import chalk from 'chalk';
 import { AGENT_PRESETS, getAgentIds, buildCronJobs } from './agents.js';
@@ -88,6 +88,17 @@ export class OpenClawManager {
     }
   }
 
+  /**
+   * Ensure we have a resolved OpenClaw binary path if OpenClaw is installed.
+   */
+  async ensureBinary() {
+    const status = await this.check();
+    if (!status.installed) {
+      return { installed: false, version: null };
+    }
+    return status;
+  }
+
   // ─── Installation ───────────────────────────────────────────────
 
   async check() {
@@ -107,11 +118,11 @@ export class OpenClawManager {
         this.openclawBin = bin === 'openclaw'
           ? execSync('which openclaw 2>/dev/null', { encoding: 'utf-8', timeout: 3000 }).trim()
           : bin;
-        return { installed: true, version };
+        return { installed: true, version, bin: this.openclawBin };
       } catch { /* try next */ }
     }
 
-    return { installed: false, version: null };
+    return { installed: false, version: null, bin: null };
   }
 
   async install() {
@@ -944,6 +955,51 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
     }
     if (typeof result.status === 'number' && result.status !== 0) {
       throw new Error(`OpenClaw onboard exited with code ${result.status}`);
+    }
+  }
+
+  /**
+   * Run a raw OpenClaw command with Bolta profile/env.
+   * Returns process exit code.
+   */
+  async runOpenClaw(args = [], { stdio = 'inherit' } = {}) {
+    const status = await this.ensureBinary();
+    if (!status.installed) {
+      throw new Error('OpenClaw is not installed. Run `boltaclaw start` or `boltaclaw setup` first.');
+    }
+
+    const bin = this.openclawBin || 'openclaw';
+    const result = spawnSync(bin, ['--profile', this.profileName, ...args], {
+      env: this._env(),
+      stdio,
+    });
+
+    if (result.error) {
+      throw new Error(`Failed to run OpenClaw command: ${result.error.message}`);
+    }
+
+    return typeof result.status === 'number' ? result.status : 1;
+  }
+
+  /**
+   * Stop services and remove local OpenClaw + Boltaclaw state.
+   */
+  async uninstall({ removeData = false } = {}) {
+    await this.stopGateway();
+
+    // Best-effort OpenClaw profile uninstall hook
+    try {
+      await this.runOpenClaw(['uninstall', '--yes'], { stdio: 'ignore' });
+    } catch {
+      // Ignore: older OpenClaw versions may not support uninstall command.
+    }
+
+    if (existsSync(this.stateDir)) {
+      rmSync(this.stateDir, { recursive: true, force: true });
+    }
+
+    if (removeData && existsSync(this.config.dataDir)) {
+      rmSync(this.config.dataDir, { recursive: true, force: true });
     }
   }
 
