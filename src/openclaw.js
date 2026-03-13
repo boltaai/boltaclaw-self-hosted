@@ -526,10 +526,26 @@ export class OpenClawManager {
   configureChannels() {
     // Use OpenClaw's `config set` to persist channel config — survives gateway restarts.
     // Manually editing openclaw.json gets overwritten by the gateway on startup.
+    const telegramDisabled = ['1', 'true', 'yes'].includes(
+      String(this.config.get('TELEGRAM_DISABLED') || '').toLowerCase()
+    );
 
     // Telegram
     const tgToken = this.config.get('TELEGRAM_BOT_TOKEN');
-    if (tgToken) {
+    if (telegramDisabled) {
+      // Hard disable: remove persisted Telegram channel config from OpenClaw profile.
+      this.config.delete('TELEGRAM_BOT_TOKEN');
+      this.config.delete('TELEGRAM_USER_ID');
+      this.config.delete('TELEGRAM_WEBHOOK_URL');
+      this._exec('config unset channels.telegram.botToken', { throwOnError: false });
+      this._exec('config unset channels.telegram.allowFrom', { throwOnError: false });
+      this._exec('config unset channels.telegram.dmPolicy', { throwOnError: false });
+      this._exec('config unset channels.telegram.groupPolicy', { throwOnError: false });
+      this._exec('config unset channels.telegram.streaming', { throwOnError: false });
+      if (this.verbose) {
+        console.log(chalk.gray('  Telegram integration is locally disabled (TELEGRAM_DISABLED=true)'));
+      }
+    } else if (tgToken) {
       try {
         // Check if already configured to avoid unnecessary writes
         const current = this._exec('config get channels.telegram.botToken', { throwOnError: false });
@@ -1203,8 +1219,15 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
     }
 
     // Update Telegram bot token
-    if (cloudConfig.telegram_bot_token) {
+    const telegramDisabled = ['1', 'true', 'yes'].includes(
+      String(this.config.get('TELEGRAM_DISABLED') || '').toLowerCase()
+    );
+    if (cloudConfig.telegram_bot_token && !telegramDisabled) {
       this.config.set('TELEGRAM_BOT_TOKEN', cloudConfig.telegram_bot_token);
+    } else if (cloudConfig.telegram_bot_token && telegramDisabled) {
+      if (this.verbose) {
+        console.log(chalk.gray('  Telegram token from cloud ignored (TELEGRAM_DISABLED=true)'));
+      }
     }
 
     // Update social accounts context → append to TOOLS.md
