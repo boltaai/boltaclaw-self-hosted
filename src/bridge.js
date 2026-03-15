@@ -61,6 +61,7 @@ export class Bridge {
     this.ws.on('agent_bootstrap_sync', (data) => this._onAgentBootstrapSync(data));
     this.ws.on('register_workspace_result', (data) => this._onRegisterWorkspaceResult(data));
     this.ws.on('ping', () => this.ws.send('pong', {}));
+    this.ws.on('sleep', (data) => this._onSleep(data));
 
     // Reconnect handler — use persistent runner_key (install token is burned after first handshake)
     this.ws.on('reconnected', () => {
@@ -207,6 +208,25 @@ export class Bridge {
     }
   }
 
+  _onSleep(data) {
+    const reason = data?.reason || 'idle';
+    console.log(`  💤 Sleep command received (reason: ${reason})`);
+
+    // Don't sleep if there are active jobs
+    if (this.activeJobs.size > 0) {
+      console.log(`  ⏳ Ignoring sleep — ${this.activeJobs.size} job(s) still active`);
+      return;
+    }
+
+    // Trigger graceful shutdown via callback (set by cli.js)
+    if (this.onSleepCallback) {
+      this.onSleepCallback(reason);
+    } else {
+      // Fallback: exit directly
+      process.exit(0);
+    }
+  }
+
   _onConfigSync(data) {
     if (data.config) {
       // Multi-tenant: handle workspace registration from server
@@ -238,9 +258,16 @@ export class Bridge {
 
       // Store Telegram bot token if provided
       if (data.config.telegram_bot_token) {
-        this.config.set('TELEGRAM_BOT_TOKEN', data.config.telegram_bot_token);
-        const redacted = data.config.telegram_bot_token.substring(0, 8) + '...';
-        console.log(`  🔑 Telegram bot token stored: ${redacted}`);
+        const telegramDisabled = ['1', 'true', 'yes'].includes(
+          String(this.config.get('TELEGRAM_DISABLED') || '').toLowerCase()
+        );
+        if (!telegramDisabled) {
+          this.config.set('TELEGRAM_BOT_TOKEN', data.config.telegram_bot_token);
+          const redacted = data.config.telegram_bot_token.substring(0, 8) + '...';
+          console.log(`  🔑 Telegram bot token stored: ${redacted}`);
+        } else {
+          console.log('  ⏭ Telegram token ignored (TELEGRAM_DISABLED=true)');
+        }
       }
 
       // Apply to OpenClaw workspace files (SOUL.md, USER.md, TOOLS.md)
