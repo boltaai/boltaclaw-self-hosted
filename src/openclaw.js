@@ -865,7 +865,7 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
       const bin = this.openclawBin || 'openclaw';
       this.gatewayProcess = spawn(
         bin,
-        ['--profile', this.profileName, 'gateway', 'run', '--force'],
+        ['--profile', this.profileName, 'gateway', 'run'],
         {
           env: this._env(),
           stdio: this.verbose ? 'inherit' : ['ignore', 'pipe', 'pipe'],
