@@ -196,6 +196,8 @@ program
           },
         });
         await telegramWebhook.start();
+        // Give bridge a reference so it can send telegram_reply responses
+        bridge.telegramWebhook = telegramWebhook;
         console.log(chalk.gray(`  Telegram webhook: http://0.0.0.0:${opts.telegramPort}`));
       } catch (err) {
         console.error(chalk.yellow(`  ⚠ Telegram webhook failed to start: ${err.message}`));

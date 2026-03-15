@@ -62,6 +62,7 @@ export class Bridge {
     this.ws.on('register_workspace_result', (data) => this._onRegisterWorkspaceResult(data));
     this.ws.on('ping', () => this.ws.send('pong', {}));
     this.ws.on('sleep', (data) => this._onSleep(data));
+    this.ws.on('telegram_reply', (data) => this._onTelegramReply(data));
 
     // Reconnect handler — use persistent runner_key (install token is burned after first handshake)
     this.ws.on('reconnected', () => {
@@ -205,6 +206,22 @@ export class Bridge {
       this.activeJobs.delete(job_id);
       this.db.updateJob(job_id, 'cancelled');
       console.log(`  🚫 Job cancelled: ${job_id}`);
+    }
+  }
+
+  async _onTelegramReply(data) {
+    const { chat_id, text } = data;
+    if (!chat_id || !text) return;
+
+    if (this.telegramWebhook) {
+      try {
+        await this.telegramWebhook.sendReply(chat_id, text);
+        console.log(`  📤 Telegram reply sent to chat ${chat_id} (${text.length} chars)`);
+      } catch (err) {
+        console.error(`  ❌ Telegram reply failed: ${err.message}`);
+      }
+    } else {
+      console.warn('  ⚠ Telegram reply received but no webhook instance available');
     }
   }
 
