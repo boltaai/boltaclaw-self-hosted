@@ -282,6 +282,13 @@ export class Bridge {
           this.config.set('TELEGRAM_BOT_TOKEN', data.config.telegram_bot_token);
           const redacted = data.config.telegram_bot_token.substring(0, 8) + '...';
           console.log(`  🔑 Telegram bot token stored: ${redacted}`);
+
+          // Start Telegram webhook dynamically if not already running
+          // (token arrives via config_sync after startup, so the initial
+          //  check in cli.js may have found no token yet)
+          if (!this.telegramWebhook && this.onTelegramTokenReceived) {
+            this.onTelegramTokenReceived(data.config.telegram_bot_token);
+          }
         } else {
           console.log('  ⏭ Telegram token ignored (TELEGRAM_DISABLED=true)');
         }

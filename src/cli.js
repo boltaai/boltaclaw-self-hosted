@@ -175,16 +175,17 @@ program
     console.log(chalk.gray('  Waiting for jobs from Bolta dashboard...\n'));
     console.log(chalk.gray(`  OpenClaw gateway: ws://127.0.0.1:${opts.port}`));
 
-    // Step 5: Start Telegram webhook if configured
-    let telegramWebhook = null;
-    if (config.get('TELEGRAM_BOT_TOKEN')) {
+    // Helper: start the Telegram webhook (called at startup or when token arrives via config_sync)
+    const startTelegramWebhook = async () => {
+      if (telegramWebhook) return; // Already running
+      const botToken = config.get('TELEGRAM_BOT_TOKEN');
+      if (!botToken) return;
       try {
         telegramWebhook = new TelegramWebhook(config, {
           port: parseInt(opts.telegramPort, 10),
           publicUrl: opts.telegramUrl || config.get('TELEGRAM_WEBHOOK_URL') || '',
           verbose: opts.verbose,
           onMessage: async ({ chatId, userId, text, username }) => {
-            // Dispatch as a job via bridge
             console.log(`  📨 Telegram job from @${username}: "${text.slice(0, 60)}..."`);
             bridge.ws.send('telegram_message', {
               chat_id: chatId,
@@ -196,14 +197,23 @@ program
           },
         });
         await telegramWebhook.start();
-        // Give bridge a reference so it can send telegram_reply responses
         bridge.telegramWebhook = telegramWebhook;
         console.log(chalk.gray(`  Telegram webhook: http://0.0.0.0:${opts.telegramPort}`));
       } catch (err) {
         console.error(chalk.yellow(`  ⚠ Telegram webhook failed to start: ${err.message}`));
-        console.error(chalk.gray('    Agents will still work — Telegram just won\'t be available.'));
+        telegramWebhook = null;
       }
-    }
+    };
+
+    // Callback for when bot token arrives via config_sync (after startup)
+    bridge.onTelegramTokenReceived = async () => {
+      console.log('  📡 Telegram token received — starting webhook...');
+      await startTelegramWebhook();
+    };
+
+    // Step 5: Start Telegram webhook if token is already configured locally
+    let telegramWebhook = null;
+    await startTelegramWebhook();
 
     console.log(chalk.gray('  Press Ctrl+C to stop\n'));
 
