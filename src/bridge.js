@@ -61,7 +61,6 @@ export class Bridge {
     this.ws.on('agent_bootstrap_sync', (data) => this._onAgentBootstrapSync(data));
     this.ws.on('register_workspace_result', (data) => this._onRegisterWorkspaceResult(data));
     this.ws.on('ping', () => this.ws.send('pong', {}));
-    this.ws.on('sleep', (data) => this._onSleep(data));
     this.ws.on('telegram_reply', (data) => this._onTelegramReply(data));
 
     // Reconnect handler — use persistent runner_key (install token is burned after first handshake)
@@ -222,25 +221,6 @@ export class Bridge {
       }
     } else {
       console.warn('  ⚠ Telegram reply received but no webhook instance available');
-    }
-  }
-
-  _onSleep(data) {
-    const reason = data?.reason || 'idle';
-    console.log(`  💤 Sleep command received (reason: ${reason})`);
-
-    // Don't sleep if there are active jobs
-    if (this.activeJobs.size > 0) {
-      console.log(`  ⏳ Ignoring sleep — ${this.activeJobs.size} job(s) still active`);
-      return;
-    }
-
-    // Trigger graceful shutdown via callback (set by cli.js)
-    if (this.onSleepCallback) {
-      this.onSleepCallback(reason);
-    } else {
-      // Fallback: exit directly
-      process.exit(0);
     }
   }
 

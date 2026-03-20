@@ -217,19 +217,16 @@ program
 
     console.log(chalk.gray('  Press Ctrl+C to stop\n'));
 
-    // Graceful shutdown (shared by SIGINT/SIGTERM and server-initiated sleep)
-    const shutdown = async (label = 'Shutting down') => {
-      console.log(chalk.yellow(`\n  ${label}...`));
+    // Graceful shutdown
+    const shutdown = async () => {
+      console.log(chalk.yellow('\n  Shutting down...'));
       if (telegramWebhook) await telegramWebhook.stop();
       await bridge.disconnect();
       await ocManager.stopGateway();
       process.exit(0);
     };
-    process.on('SIGINT', () => shutdown());
-    process.on('SIGTERM', () => shutdown());
-
-    // Server-initiated sleep (idle auto-suspend for managed sprites)
-    bridge.onSleepCallback = (reason) => shutdown(`Going to sleep (${reason})`);
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
   });
 
 program
