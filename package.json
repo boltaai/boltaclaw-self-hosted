@@ -1,0 +1,12 @@
+{
+  "name": "boltaclaw",
+  "version": "0.1.0",
+  "description": "BoltaClaw self-hosted installer/launcher",
+  "license": "MIT",
+  "bin": {
+    "boltaclaw": "src/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
