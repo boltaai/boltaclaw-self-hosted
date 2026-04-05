@@ -141,10 +141,78 @@ export class BoltaAPIClient {
   }
 
   /**
-   * GET list of agents in the workspace.
+   * GET list of agents in the workspace (conductor endpoint).
    */
   async getAgents() {
     return this.request('GET', `workspaces/${this.workspaceId}/conductor/agents`);
+  }
+
+  // ─── Agents V2 API ──────────────────────────────────────────────────────────
+
+  /**
+   * GET available agent presets from the marketplace.
+   */
+  async getPresets() {
+    return this.request('GET', `workspaces/${this.workspaceId}/agents-v2/presets/`);
+  }
+
+  /**
+   * POST hire an agent preset. Creates agent + default job.
+   * @param {string} presetId - Preset ID (e.g. "hype_man", "hunter")
+   * @param {object} body - { name?, job_name?, voice_profile_id?, account_ids? }
+   */
+  async hirePreset(presetId, body = {}) {
+    return this.request('POST', `workspaces/${this.workspaceId}/agents-v2/presets/${presetId}/hire/`, body);
+  }
+
+  /**
+   * GET list of agents (v2) in the workspace.
+   */
+  async getAgentsV2() {
+    return this.request('GET', `workspaces/${this.workspaceId}/agents-v2/`);
+  }
+
+  /**
+   * PATCH update an agent (status, name, etc.).
+   * @param {string} agentId
+   * @param {object} body - Fields to update
+   */
+  async updateAgent(agentId, body) {
+    return this.request('PATCH', `workspaces/${this.workspaceId}/agents-v2/${agentId}/`, body);
+  }
+
+  /**
+   * GET list of jobs for an agent.
+   * @param {string} agentId
+   */
+  async getJobs(agentId) {
+    return this.request('GET', `workspaces/${this.workspaceId}/agents-v2/${agentId}/jobs/`);
+  }
+
+  /**
+   * POST create a job on an agent.
+   * @param {string} agentId
+   * @param {object} body - { name, trigger, schedule, voice_profile_id?, account_ids?, trigger_config?, run_instructions? }
+   */
+  async createJob(agentId, body) {
+    return this.request('POST', `workspaces/${this.workspaceId}/agents-v2/${agentId}/jobs/`, body);
+  }
+
+  /**
+   * PATCH update a job.
+   * @param {string} agentId
+   * @param {string} jobId
+   * @param {object} body - Fields to update
+   */
+  async updateJob(agentId, jobId, body) {
+    return this.request('PATCH', `workspaces/${this.workspaceId}/agents-v2/${agentId}/jobs/${jobId}/`, body);
+  }
+
+  /**
+   * GET voice profiles for the workspace.
+   */
+  async getVoiceProfiles() {
+    return this.request('GET', `workspaces/${this.workspaceId}/voice/profiles/`);
   }
 }
 

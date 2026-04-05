@@ -13,6 +13,10 @@ import { OpenClawManager } from './openclaw.js';
 import { TelegramWebhook } from './telegram.js';
 import { BoltaAPIClient } from './api-client.js';
 import { printBanner, printSection, printKeyValue } from './tui.js';
+import { registerPresetsCommand } from './commands/presets.js';
+import { registerAgentCommands } from './commands/agent.js';
+import { registerJobCommands } from './commands/job.js';
+import { handleTelegramCommand } from './commands/telegram-commands.js';
 
 const program = new Command();
 const DEFAULT_PRIMARY_MODEL = 'anthropic/claude-sonnet-4-6';
@@ -186,6 +190,17 @@ program
           publicUrl: opts.telegramUrl || config.get('TELEGRAM_WEBHOOK_URL') || '',
           verbose: opts.verbose,
           onMessage: async ({ chatId, userId, text, username }) => {
+            // Intercept management commands (e.g. /presets, /hire, /agents)
+            const apiClient = new BoltaAPIClient(config);
+            if (apiClient.validate().ok) {
+              const cmdResult = await handleTelegramCommand(text, apiClient);
+              if (cmdResult.handled) {
+                console.log(`  📨 Telegram command from @${username}: "${text.slice(0, 60)}"`);
+                return cmdResult.reply;
+              }
+            }
+
+            // Pass through to agent dispatch
             console.log(`  📨 Telegram job from @${username}: "${text.slice(0, 60)}..."`);
             bridge.ws.send('telegram_message', {
               chat_id: chatId,
@@ -1054,5 +1069,11 @@ program
     }
   });
 
+
+// ─── Agent & Job management commands ───────��────────────────────────────────
+
+registerPresetsCommand(program);
+registerAgentCommands(program);
+registerJobCommands(program);
 
 program.parse();
