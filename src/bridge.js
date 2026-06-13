@@ -21,6 +21,42 @@ import { join } from 'path';
 const BOLTA_WS_URL = process.env.BOLTA_WS_URL || 'wss://platty.boltathread.com/ws/runner/';
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
+// ─── Cloud-pushed token validation (trust boundary) ──────────────────
+// Values arriving via config_sync are stored and later passed to the
+// OpenClaw CLI. Even though the CLI is now invoked via argv (no shell),
+// we reject malformed / metacharacter-laden values here as defense in
+// depth, so a malicious or compromised cloud payload cannot persist a
+// poisoned token.
+
+// Reject anything containing shell metacharacters (last-resort guard for
+// values without a well-known format).
+const SHELL_METACHAR_RE = /["'`$;|&\n\\()<>]/;
+
+const TOKEN_PATTERNS = {
+  // Telegram bot token: "<digits>:<base64url-ish>"
+  telegram_bot_token: /^\d{6,}:[A-Za-z0-9_-]{30,}$/,
+  // Slack tokens: xoxb-/xoxa-/xoxp-/xoxr-/xoxs-...
+  slack_token: /^xox[baprs]-[A-Za-z0-9-]+$/,
+  // Anthropic / OpenAI-style keys
+  llm_api_key: /^sk-[A-Za-z0-9-]{20,}$/,
+};
+
+/**
+ * Validate a cloud-pushed secret before storing/using it.
+ * @param {string} kind   key into TOKEN_PATTERNS, or '' for no strict format
+ * @param {*} value       the candidate value
+ * @returns {boolean} true if the value is safe to use
+ */
+function isValidCloudToken(kind, value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 4096) {
+    return false;
+  }
+  const pattern = TOKEN_PATTERNS[kind];
+  if (pattern) return pattern.test(value);
+  // No well-known format: at minimum reject shell metacharacters.
+  return !SHELL_METACHAR_RE.test(value);
+}
+
 export class Bridge {
   constructor(config, openclawManager, opts = {}) {
     this.config = config;
@@ -129,7 +165,11 @@ export class Bridge {
     }
     // Store Bolta API key for MCP
     if (data.api_key) {
-      this.config.set('BOLTA_API_KEY', data.api_key);
+      if (isValidCloudToken('', data.api_key)) {
+        this.config.set('BOLTA_API_KEY', data.api_key);
+      } else {
+        console.warn('  ⚠ Rejected cloud-pushed api_key (failed validation)');
+      }
     }
     // Sync any config from cloud
     if (data.config) {
@@ -236,20 +276,34 @@ export class Bridge {
 
       // Store Bolta API key if provided (for MCP auth)
       if (data.config.api_key) {
-        this.config.set('BOLTA_API_KEY', data.config.api_key);
+        if (isValidCloudToken('', data.config.api_key)) {
+          this.config.set('BOLTA_API_KEY', data.config.api_key);
+        } else {
+          console.warn('  ⚠ Rejected cloud-pushed api_key (failed validation)');
+        }
       }
 
       // Store LLM API key and provider if provided
       if (data.config.llm_api_key && data.config.llm_provider) {
-        const { envKey, model, provider } = resolveProviderConfig({
-          provider: data.config.llm_provider,
-          model: data.config.llm_model,
-        });
-        if (envKey) {
-          this.config.set(envKey, data.config.llm_api_key);
-          this.config.set('MODEL_PRIMARY', model);
-          const redacted = data.config.llm_api_key.substring(0, 8) + '...';
-          console.log(`  🔑 LLM API key stored: ${envKey} = ${redacted} (provider: ${provider}, model: ${model})`);
+        // Accept the canonical sk- key shape, else fall back to a
+        // metacharacter-rejecting guard so non-OpenAI/Anthropic providers
+        // (which use other key formats) still work but injection is blocked.
+        const llmKeyValid =
+          isValidCloudToken('llm_api_key', data.config.llm_api_key) ||
+          isValidCloudToken('', data.config.llm_api_key);
+        if (!llmKeyValid) {
+          console.warn('  ⚠ Rejected cloud-pushed llm_api_key (failed validation)');
+        } else {
+          const { envKey, model, provider } = resolveProviderConfig({
+            provider: data.config.llm_provider,
+            model: data.config.llm_model,
+          });
+          if (envKey) {
+            this.config.set(envKey, data.config.llm_api_key);
+            this.config.set('MODEL_PRIMARY', model);
+            const redacted = data.config.llm_api_key.substring(0, 8) + '...';
+            console.log(`  🔑 LLM API key stored: ${envKey} = ${redacted} (provider: ${provider}, model: ${model})`);
+          }
         }
       }
 
@@ -258,7 +312,9 @@ export class Bridge {
         const telegramDisabled = ['1', 'true', 'yes'].includes(
           String(this.config.get('TELEGRAM_DISABLED') || '').toLowerCase()
         );
-        if (!telegramDisabled) {
+        if (!telegramDisabled && !isValidCloudToken('telegram_bot_token', data.config.telegram_bot_token)) {
+          console.warn('  ⚠ Rejected cloud-pushed telegram_bot_token (failed validation)');
+        } else if (!telegramDisabled) {
           this.config.set('TELEGRAM_BOT_TOKEN', data.config.telegram_bot_token);
           const redacted = data.config.telegram_bot_token.substring(0, 8) + '...';
           console.log(`  🔑 Telegram bot token stored: ${redacted}`);

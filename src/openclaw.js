@@ -27,7 +27,7 @@
  *     logs/                   — gateway logs
  */
 
-import { execSync, spawn, spawnSync } from 'child_process';
+import { execSync, execFileSync, spawn, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import chalk from 'chalk';
@@ -76,6 +76,28 @@ export class OpenClawManager {
     const cmd = `"${bin}" --profile ${this.profileName} ${args}`;
     try {
       return execSync(cmd, {
+        encoding: 'utf-8',
+        env: this._env(),
+        timeout,
+        stdio: this.verbose ? 'inherit' : 'pipe',
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch (err) {
+      if (throwOnError) throw err;
+      return null;
+    }
+  }
+
+  /**
+   * Run an openclaw CLI command passing arguments as an argv array (NO shell).
+   * Use this whenever any argument contains untrusted / dynamic input (e.g.
+   * tokens or messages pushed from the cloud) so values cannot break out into
+   * shell command injection.
+   */
+  _execArgs(argv, { timeout = 30000, throwOnError = true } = {}) {
+    const bin = this.openclawBin || 'openclaw';
+    try {
+      return execFileSync(bin, ['--profile', this.profileName, ...argv], {
         encoding: 'utf-8',
         env: this._env(),
         timeout,
@@ -550,7 +572,7 @@ export class OpenClawManager {
         // Check if already configured to avoid unnecessary writes
         const current = this._exec('config get channels.telegram.botToken', { throwOnError: false });
         if (!current || current.includes('undefined') || !current.includes('REDACTED')) {
-          this._exec(`config set channels.telegram.botToken "${tgToken}"`);
+          this._execArgs(['config', 'set', 'channels.telegram.botToken', tgToken]);
           this._exec('config set channels.telegram.allowFrom \'["*"]\'');
           this._exec('config set channels.telegram.dmPolicy "open"');
           this._exec('config set channels.telegram.groupPolicy "allowlist"');
@@ -570,10 +592,10 @@ export class OpenClawManager {
     const slackToken = this.config.get('SLACK_BOT_TOKEN');
     if (slackToken) {
       try {
-        this._exec(`config set channels.slack.botToken "${slackToken}"`);
+        this._execArgs(['config', 'set', 'channels.slack.botToken', slackToken]);
         const appToken = this.config.get('SLACK_APP_TOKEN');
         if (appToken) {
-          this._exec(`config set channels.slack.appToken "${appToken}"`);
+          this._execArgs(['config', 'set', 'channels.slack.appToken', appToken]);
         }
         if (this.verbose) {
           console.log(chalk.green('  ✓ Slack channel configured'));
@@ -1044,15 +1066,10 @@ To call any tool directly: \`mcporter call bolta.<tool-name> key=value\`
       ];
 
       const agentBin = this.openclawBin || 'openclaw';
-      const cmd = `"${agentBin}" ` + args.map(a => {
-        // Escape the message properly
-        if (a.includes(' ') || a.includes('"') || a.includes("'") || a.includes('\n')) {
-          return JSON.stringify(a);
-        }
-        return a;
-      }).join(' ');
 
-      const result = execSync(cmd, {
+      // Pass args as an argv array (NO shell) so the cloud/user-controlled
+      // `message` cannot break out into shell command injection.
+      const result = execFileSync(agentBin, args, {
         encoding: 'utf-8',
         env: {
           ...this._env(),
